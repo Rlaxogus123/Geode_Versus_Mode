@@ -4,11 +4,12 @@
 //
 // mapmode: 팝업 레이아웃 상수와 버튼 도우미. kBox/kPanel 등은 영역의 y 좌표.
 namespace mapmode {
-constexpr float kWidth = 480.f, kHeight = 310.f;
-constexpr float kTabsY = 258.f, kRulesY = 227.f, kRowH = 26.f;
-constexpr float kPanelX = 14.f, kPanelW = kWidth - 28.f, kPanelBottom = 118.f, kPanelTop = 206.f;
-constexpr float kFaceY = 183.f, kStarY = 150.f, kStarY2 = 131.f;
-constexpr float kBoxBottom = 42.f, kBoxTop = 112.f, kLineY = 92.f, kLineY2 = 62.f, kApplyY = 24.f;
+// 높이 286: 310이면 왼쪽 위 닫기 버튼이 화면(높이 320) 위로 나간다. 위쪽 줄들을 16 내리고 아래 필터 상자를 줄였다.
+constexpr float kWidth = 480.f, kHeight = 286.f;
+constexpr float kTabsY = 242.f, kRulesY = 211.f, kRowH = 26.f;
+constexpr float kPanelX = 14.f, kPanelW = kWidth - 28.f, kPanelBottom = 102.f, kPanelTop = 190.f;
+constexpr float kFaceY = 167.f, kStarY = 134.f, kStarY2 = 115.f;
+constexpr float kBoxBottom = 40.f, kBoxTop = 96.f, kLineY = 82.f, kLineY2 = 54.f, kApplyY = 24.f;
 constexpr float kLeftBoxW = 286.f, kBoxGap = 8.f;
 constexpr ccColor3B kOnPlate{38, 118, 205}, kOffPlate{10, 26, 62};
 constexpr char const* kLengthNames[] = {"Tiny", "Short", "Medium", "Long", "XL"};
