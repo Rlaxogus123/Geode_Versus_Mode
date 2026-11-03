@@ -189,6 +189,7 @@ class FinisherPopup final : public CustomizePopup {
     CCLabelBMFont* m_state = nullptr;
     int m_preview = 0;
     unsigned m_replay = 0;
+    static constexpr float kStageW = 404.f, kStageH = 92.f;  // 미리보기 칸(예전 110)
 
     // 카드에 넣는 피니셔 아이콘.
     static CCNode* cardArt(int kind) {
@@ -198,10 +199,11 @@ class FinisherPopup final : public CustomizePopup {
     }
     // UI 구성. 카드는 kExecutionDisplayOrder 순서로 만들고, 카테고리 필터를 적용한다.
     bool init(std::function<void()> saved) {
-        if (!begin(440.f, 300.f, "Finisher", std::move(saved))) return false;
+        // 높이 280: 300이면 왼쪽 위 닫기 버튼이 화면(높이 320) 위로 살짝 나간다. 미리보기 칸이 그만큼 낮아진다.
+        if (!begin(440.f, 280.f, "Finisher", std::move(saved))) return false;
         setID("versus-finisher"_spr);
-        panel(m_mainLayer, {14.f, 146.f}, {412.f, 118.f}, false);
-        auto* stencil = CCLayerColor::create(ccc4(255, 255, 255, 255), 404.f, 110.f);
+        panel(m_mainLayer, {14.f, 146.f}, {412.f, kStageH + 8.f}, false);
+        auto* stencil = CCLayerColor::create(ccc4(255, 255, 255, 255), kStageW, kStageH);
         auto* clip = CCClippingNode::create(stencil);
         clip->setPosition({18.f, 150.f});
         m_mainLayer->addChild(clip);
@@ -295,9 +297,11 @@ class FinisherPopup final : public CustomizePopup {
     void play() {
         m_view->stopAllActions();
         m_view->removeAllChildrenWithCleanup(true);
+        // 장면(505 x 132)을 미리보기 칸 높이에 맞춰 줄이고 가로 가운데에 둔다.
+        float const scale = .8f * kStageH / 110.f;
         auto* holder = CCNode::create();
-        holder->setScale(.8f);
-        holder->setPosition({0.f, 4.f});
+        holder->setScale(scale);
+        holder->setPosition({(kStageW - 505.f * scale) / 2.f, 4.f * scale / .8f});
         m_view->addChild(holder);
         auto* stage = CCNode::create();
         stage->setContentSize({505.f, 132.f});
@@ -361,25 +365,26 @@ class NicknamePopup final : public CustomizePopup {
     std::vector<CCNode*> m_fontRows;
     std::vector<CCLabelBMFont*> m_fontLabels;
     std::vector<bool> m_fontStyled;
-    static constexpr float kListWidth = 176.f, kListHeight = 156.f, kRowHeight = 27.f;
+    static constexpr float kListWidth = 176.f, kListHeight = 140.f, kRowHeight = 27.f;
 
     // UI 구성. 실제로 존재하는 글꼴 파일만 목록에 넣는다. 비멤버십은 색 설정을 미리보기만 할
     // 수 있다.
     bool init(std::function<void()> saved) {
-        if (!begin(440.f, 300.f, "Nickname Style", std::move(saved))) return false;
+        // 높이 280: 300이면 왼쪽 위 닫기 버튼이 화면(높이 320) 위로 살짝 나간다. 위쪽 줄들을 그만큼 내렸다.
+        if (!begin(440.f, 280.f, "Nickname Style", std::move(saved))) return false;
         setID("versus-nickname"_spr);
-        panel(m_mainLayer, {14.f, 214.f}, {412.f, 44.f}, false);
+        panel(m_mainLayer, {14.f, 196.f}, {412.f, 44.f}, false);
         m_fonts.push_back(0);
         for (int font = 1; font < kNicknameFontCount; ++font)
             if (nicknameFontFile(font)) m_fonts.push_back(font);
         if (std::find(m_fonts.begin(), m_fonts.end(), m_draft.font) == m_fonts.end()) m_draft.font = 0;
         constexpr float column = 124.f;
         if (!Service::get().profile().membership)
-            label(m_mainLayer, "Colors: Membership only - preview", {column, 200.f}, .24f, 220.f, ccc3(255, 205, 110));
-        button(m_buttonMenu, this, menu_selector(NicknamePopup::onFontPrevious), "<", {30.f, 176.f}, .62f)
+            label(m_mainLayer, "Colors: Membership only - preview", {column, 184.f}, .24f, 220.f, ccc3(255, 205, 110));
+        button(m_buttonMenu, this, menu_selector(NicknamePopup::onFontPrevious), "<", {30.f, 162.f}, .62f)
             ->setID("nickname-font-previous"_spr);
-        m_fontText = label(m_mainLayer, "", {column, 176.f}, .42f, 132.f, ccWHITE, false, "goldFont.fnt");
-        button(m_buttonMenu, this, menu_selector(NicknamePopup::onFontNext), ">", {218.f, 176.f}, .62f)
+        m_fontText = label(m_mainLayer, "", {column, 162.f}, .42f, 132.f, ccWHITE, false, "goldFont.fnt");
+        button(m_buttonMenu, this, menu_selector(NicknamePopup::onFontNext), ">", {218.f, 162.f}, .62f)
             ->setID("nickname-font-next"_spr);
         auto swatch = [&](int tag, float x, char const* text) {
             auto* disc = CCSprite::create("GJ_button_01.png");
@@ -390,15 +395,15 @@ class NicknamePopup final : public CustomizePopup {
             fill->setScale(28.f / std::max(1.f, fill->getContentSize().height));
             disc->addChild(fill);
             auto* item = CCMenuItemSpriteExtra::create(disc, this, menu_selector(NicknamePopup::onColor));
-            item->setPosition({x, 134.f});
+            item->setPosition({x, 124.f});
             item->setTag(tag);
             m_buttonMenu->addChild(item);
-            label(m_mainLayer, text, {x, 111.f}, .3f, 100.f, kIce);
+            label(m_mainLayer, text, {x, 102.f}, .3f, 100.f, kIce);
             return fill;
         };
         m_startSwatch = swatch(0, 74.f, "Start color");
         m_endSwatch = swatch(1, 174.f, "End color");
-        m_angleText = label(m_mainLayer, "", {column, 92.f}, .34f, 200.f, kIce);
+        m_angleText = label(m_mainLayer, "", {column, 87.f}, .34f, 200.f, kIce);
         m_angle = Slider::create(this, menu_selector(NicknamePopup::onAngle), .5f);
         m_angle->setPosition({column, 70.f});
         m_angle->setValue(m_draft.angle / 359.f);
@@ -408,7 +413,7 @@ class NicknamePopup final : public CustomizePopup {
         button(m_buttonMenu, this, menu_selector(NicknamePopup::onRotateRight), ">", {218.f, 70.f}, .58f)
             ->setID("nickname-direction-right"_spr);
         button(m_buttonMenu, this, menu_selector(NicknamePopup::onUse), "Use", {column, 28.f}, .62f);
-        label(m_mainLayer, fmt::format("FONTS ({})", m_fonts.size()), {338.f, 200.f}, .32f, kListWidth, kIce);
+        label(m_mainLayer, fmt::format("FONTS ({})", m_fonts.size()), {338.f, 184.f}, .32f, kListWidth, kIce);
         auto* paper = NineSlice::create("square02b_001.png");
         paper->setContentSize({kListWidth + 4.f, kListHeight + 4.f});
         paper->setPosition({338.f, 28.f + kListHeight / 2.f});
@@ -585,18 +590,19 @@ class TitlesPopup final : public CustomizePopup {
 
     // UI 구성. 목록 영역을 만든 뒤 다음 프레임에 load로 데이터를 요청한다.
     bool init(std::function<void()> saved) {
-        if (!begin(420.f, 296.f, "Achievements", std::move(saved))) return false;
+        // 높이 280: 296이면 왼쪽 위 닫기 버튼이 화면(높이 320) 위로 살짝 나간다. 목록이 그만큼 짧아진다.
+        if (!begin(420.f, 280.f, "Achievements", std::move(saved))) return false;
         setID("versus-titles"_spr);
-        m_summary = label(m_mainLayer, "", {175.f, 252.f}, .5f, 290.f, ccWHITE, false, "goldFont.fnt");
-        m_filter = button(m_buttonMenu, this, menu_selector(TitlesPopup::onFilter), "All", {370.f, 252.f}, .42f,
+        m_summary = label(m_mainLayer, "", {175.f, 236.f}, .5f, 290.f, ccWHITE, false, "goldFont.fnt");
+        m_filter = button(m_buttonMenu, this, menu_selector(TitlesPopup::onFilter), "All", {370.f, 236.f}, .42f,
                           "GJ_button_04.png");
         auto* paper = NineSlice::create("square02b_001.png");
-        paper->setContentSize({396.f, 222.f});
-        paper->setPosition({210.f, 130.f});
+        paper->setContentSize({396.f, 206.f});
+        paper->setPosition({210.f, 122.f});
         paper->setColor({12, 22, 44});
         paper->setOpacity(220);
         m_mainLayer->addChild(paper);
-        m_scroll = TapScrollLayer::create({396.f, 218.f}, [self = Weak<TitlesPopup>(this)](CCNode* row) {
+        m_scroll = TapScrollLayer::create({396.f, 202.f}, [self = Weak<TitlesPopup>(this)](CCNode* row) {
             if (auto owner = self.lock()) owner->onRow(row->getTag());
         });
         m_scroll->setPosition({12.f, 21.f});
@@ -840,7 +846,7 @@ class TitlesPopup final : public CustomizePopup {
         }
         float height = 6.f;
         for (auto const& item : items) height += item.height + gap;
-        height = std::max(218.f, height);
+        height = std::max(202.f, height);
         content->setContentSize({396.f, height});
         float y = height - 3.f;
         for (auto const& item : items) {

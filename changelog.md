@@ -4,6 +4,7 @@
 
 ### Fixes
 - Main Versus screen (and Public Room / Ranked): the LIVE and notice (bell) buttons, and the Discord and patch notes buttons, could overlap on some phones. Those rows are now laid out from each button's real size, with gaps that follow the screen width.
+- Patch Notes, Achievements, Nickname Style, Finisher and Membership windows: their close button sat slightly off the top of the screen. The windows are a little shorter now.
 
 ## v1.0.5 (2026-11-03)
 

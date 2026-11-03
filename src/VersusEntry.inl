@@ -56,7 +56,7 @@ class PatchNotesPopup final : public ::versus::DeferredPopup {
             }
             offset += body->getContentSize().height + (heading ? 9.f : 7.f);
         }
-        float height = std::max(210.f, offset + 10.f);
+        float height = std::max(190.f, offset + 10.f);
         m_scroll->m_contentLayer->setContentSize({396.f, height});
         for (auto const& [row, y] : rows) row->setPositionY(height - y);
         m_scroll->scrollToTop();
@@ -73,15 +73,16 @@ class PatchNotesPopup final : public ::versus::DeferredPopup {
         render();
     }
     bool init() override {
-        if (!Popup::init(420.f, 300.f)) return false;
+        // 높이 280: 300이면 왼쪽 위 닫기 버튼이 화면(높이 320) 위로 살짝 나간다.
+        if (!Popup::init(420.f, 280.f)) return false;
         setTitle("Patch Notes");
         auto* paper = NineSlice::create("square02b_001.png");
-        paper->setContentSize({396.f, 210.f});
-        paper->setPosition({210.f, 155.f});
+        paper->setContentSize({396.f, 190.f});
+        paper->setPosition({210.f, 145.f});
         paper->setColor({18, 23, 34});
         paper->setOpacity(225);
         m_mainLayer->addChild(paper);
-        m_scroll = ScrollLayer::create({396.f, 210.f});
+        m_scroll = ScrollLayer::create({396.f, 190.f});
         m_scroll->setPosition({12.f, 50.f});
         m_mainLayer->addChild(m_scroll);
         button(m_buttonMenu, this, menu_selector(PatchNotesPopup::english), "English", {137.f, 24.f}, .43f);
@@ -216,7 +217,7 @@ public:
 
 // 멤버십 안내 팝업(혜택과 활성화 방법). 닫으면 next 콜백으로 코드 입력 팝업으로 이어진다.
 class MembershipInfoPopup final : public ::versus::DeferredPopup {
-    static constexpr float W = 420.f, H = 300.f, PaperW = 396.f, PaperH = 216.f, PaperY = 46.f;
+    static constexpr float W = 420.f, H = 280.f, PaperW = 396.f, PaperH = 196.f, PaperY = 46.f;  // (H 300이면 닫기 버튼이 화면 밖)
     // 영어 본문. 줄 앞 표식: "> " 안내 상자, "## " 소제목, "1. " 번호 항목, "!" 빨간 강조 경고.
     static constexpr char const* kEnglish =
         "> This membership is not made for commercial purposes. It is offered for a short time only, to keep the benefits of my existing YouTube viewers. Playing Versus without it brings no restriction or disadvantage of any kind.\n"
