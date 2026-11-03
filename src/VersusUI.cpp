@@ -5383,11 +5383,11 @@ class RankedMusicPopup final : public ::versus::DeferredPopup {
     Slider* m_slider = nullptr;
     CCLabelBMFont* m_value = nullptr;
     CCLabelBMFont* m_song = nullptr;
-    // 현재 선택된 곡(컵 전용 곡이 있으면 그 곡) 제목을 표시한다.
+    // 현재 곡 제목: 고른 곡이 있으면 그 곡, 없고 컵 노래가 있으면 컵 노래(CUP SONG).
     void showSong() {
-        int const cup = audio::cupSong();
-        m_song->setString(cup > 0 ? fmt::format("{}  (CUP SONG)", songTitle(cup)).c_str()
-                                  : songTitle(audio::rankedMusicSong()).c_str());
+        int const cup = audio::cupSong(), mine = audio::rankedMusicSong();
+        m_song->setString(mine <= 0 && cup > 0 ? fmt::format("{}  (CUP SONG)", songTitle(cup)).c_str()
+                                               : songTitle(mine).c_str());
         m_song->limitLabelWidth(170.f, .32f, .15f);
     }
     void onSong(CCObject*) {
@@ -5509,11 +5509,9 @@ class RankedMusicPopup final : public ::versus::DeferredPopup {
         m_song = label(m_mainLayer, "", {62.f, 102.f}, .32f, 170.f, ccWHITE, true, "bigFont.fnt");
         showSong();
         alwaysSongRow(290.f, 68.f);
-        if (audio::cupSong() > 0)
-            label(m_mainLayer, "This cup plays its own song.", {88.f, 30.f}, .34f, 140.f, kIce, false, "chatFont.fnt");
-        else
-            button(m_buttonMenu, this, menu_selector(RankedMusicPopup::onSong), "Change Song", {90.f, 30.f}, .58f,
-                   "GJ_button_04.png");
+        // Standard Cup(컵 노래가 있는 컵)에서도 곡을 바꿀 수 있다. Default를 고르면 다시 컵 노래가 나온다.
+        button(m_buttonMenu, this, menu_selector(RankedMusicPopup::onSong), "Change Song", {90.f, 30.f}, .58f,
+               "GJ_button_04.png");
         button(m_buttonMenu, this, menu_selector(RankedMusicPopup::onMute), "Mute", {216.f, 30.f}, .58f);
         refresh();
         refreshGame();

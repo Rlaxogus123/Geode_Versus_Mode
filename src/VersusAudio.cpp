@@ -215,14 +215,15 @@ void stopResultMusic() {
 }
 
 // Ranked 음악을 채널 0에서 시작한다. 이미 우리 음악이 나오는 중이면 아무것도 하지 않는다.
-// 우선순위: 컵이 지정한 노래 -> 사용자가 고른 노래 -> bgm 변형 파일 -> 내장 secretLoop03.
+// 우선순위: 사용자가 고른 노래 -> 컵이 지정한 노래 -> bgm 변형 파일 -> 내장 secretLoop03.
+// (사용자가 고른 노래가 있으면 Standard Cup의 컵 노래보다 먼저다.)
 void startRankedMusic() {
     if (auto* engine = FMODAudioEngine::sharedEngine()) {
         if (ownsRankedMusic(engine)) return;
         auto path = randomVariant("bgm");
         s_rankedMusicPath = path.empty() ? "secretLoop03.mp3" : path.string();
         s_playingCupSong = false;
-        for (int const song : {s_cupSong, rankedMusicSong()}) {
+        for (int const song : {rankedMusicSong(), s_cupSong}) {
             if (auto chosen = songPath(song); !chosen.empty()) {
                 s_rankedMusicPath = std::move(chosen);
                 s_playingCupSong = song == s_cupSong;
@@ -370,6 +371,7 @@ void setCupSong(int songID) {
 // 컵 노래가 방금 내려받아졌으면(재생 중인 파일과 경로가 다르면) 음악을 다시 시작해 컵 노래로 바꾼다.
 void refreshCupSong() {
     if (s_cupSong <= 0 || !s_rankedMusicPlaying) return;
+    if (!songPath(rankedMusicSong()).empty()) return;  // 사용자가 고른 노래가 나오는 중이면 그대로 둔다
     auto* engine = FMODAudioEngine::sharedEngine();
     if (!ownsRankedMusic(engine)) return;
     auto const path = songPath(s_cupSong);
