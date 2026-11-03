@@ -109,10 +109,9 @@ public:
     CREATE_FUNC(PatchNotesPopup);
 };
 
-// 제작자 YouTube 채널 / Versus Discord 링크, 버튼 사이 간격
+// 제작자 YouTube 채널 / Versus Discord 링크
 constexpr char const* kTipp7YouTube = "https://www.youtube.com/@GMDTipp7/featured";
 constexpr char const* kVersusDiscord = "https://discord.gg/PXgvB6MddY";
-constexpr float kDiscordGap = 8.f;
 // YouTube 아이콘 버튼을 만든다.
 CCMenuItemSpriteExtra* youtubeButton(CCMenu* menu, CCObject* target, SEL_MenuHandler action, CCPoint position,
                                      float height) {
@@ -1470,16 +1469,12 @@ public:
         auto* discordButton =
             iconButton(actions, this, menu_selector(VersusEntry::onDiscord), "gj_discordIcon_001.png", {}, 30.f);
         discordButton->setID("versus-discord-button"_spr);
-        float notesWidth = notesButton->getScaledContentSize().width;
-        float codeWidth = membershipButton->getScaledContentSize().width;
-        float discordWidth = discordButton->getScaledContentSize().width;
-        discordButton->setPosition({m_profileRight - discordWidth / 2.f, 43.f});
-        float const notesRight = m_profileRight - discordWidth - kDiscordGap;
-        notesButton->setPosition({notesRight - notesWidth / 2.f, 43.f});
-        membershipButton->setPosition({notesRight - notesWidth - 12.f - codeWidth / 2.f, 43.f});
         membershipButton->setID("membership-code-button"_spr);
-        m_update = iconButton(actions, this, menu_selector(VersusEntry::onUpdate), "GJ_shareBtn_001.png",
-                              {notesRight - notesWidth - codeWidth - 42.f, 43.f}, 32.f);
+        m_update = iconButton(actions, this, menu_selector(VersusEntry::onUpdate), "GJ_shareBtn_001.png", {}, 32.f);
+        // 아래 줄(오른쪽부터 Discord, 패치 노트, 멤버십 코드, 업데이트): 실제 폭과 화면 비례 간격으로 놓고,
+        // 프로필 판넬 폭을 넘으면 같이 줄인다. 업데이트 버튼은 숨겨져 있어도 자리를 미리 잡아 둔다.
+        float const gap = rowGap(m_window.width);
+        layoutRowRight({discordButton, notesButton, membershipButton, m_update}, m_profileRight, 43.f, gap, m_profileW);
         m_update->setVisible(false);
         auto* mine = button(actions, this, menu_selector(VersusEntry::onMyReports), "My Reports", {leftX + 44.f, 43.f},
                             .44f, "GJ_button_04.png");

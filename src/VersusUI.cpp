@@ -436,6 +436,44 @@ CCMenuItemSpriteExtra* iconButton(CCMenu* parent, CCObject* target, SEL_MenuHand
     return item;
 }
 
+// 실제로 그려지는 폭: 메뉴 아이템이면 안의 스프라이트 boundingBox(스케일 포함)까지 본다.
+float drawnWidth(CCNode* node) {
+    if (!node) return 0.f;
+    float width = node->getScaledContentSize().width;
+    if (auto* item = typeinfo_cast<CCMenuItemSprite*>(node))
+        if (auto* image = item->getNormalImage())
+            width = std::max(width, image->boundingBox().size.width * item->getScale());
+    return width;
+}
+
+// 화면 폭에 비례한 버튼 사이 간격(569 폭 기준 약 7).
+float rowGap(float windowWidth) {
+    return std::max(4.f, windowWidth * .012f);
+}
+
+// 노드들을 오른쪽 끝 right에서 왼쪽으로 실제 폭과 gap만큼 띄워 한 줄로 놓는다(nodes[0]이 가장 오른쪽).
+// 보이지 않는 노드는 자리를 차지하지 않는다. 줄이 maxWidth를 넘으면 전체를 같은 비율로 줄인다.
+void layoutRowRight(std::vector<CCNode*> const& nodes, float right, float y, float gap, float maxWidth) {
+    float total = 0.f;
+    int shown = 0;
+    for (auto* node : nodes)
+        if (node && node->isVisible()) {
+            total += drawnWidth(node);
+            ++shown;
+        }
+    if (shown == 0) return;
+    total += gap * (shown - 1);
+    float const fit = maxWidth > 0.f && total > maxWidth ? maxWidth / total : 1.f;
+    float x = right;
+    for (auto* node : nodes) {
+        if (!node || !node->isVisible()) continue;
+        if (fit < 1.f) node->setScale(node->getScale() * fit);
+        float const width = drawnWidth(node);
+        node->setPosition({x - width / 2.f, y});
+        x -= width + gap * fit;
+    }
+}
+
 // 노드 트리 전체에 cascade opacity를 켠다.
 void cascadeOpacity(CCNode* node) {
     if (auto* rgba = typeinfo_cast<CCRGBAProtocol*>(node)) rgba->setCascadeOpacityEnabled(true);
@@ -1341,14 +1379,13 @@ protected:
     void onAudio(CCObject*) { showSettings(m_rankedAudio); }
     CCLabelBMFont* m_inboxCount = nullptr;
     CCNode* m_inboxBadge = nullptr;
-    // 오른쪽 위에 LIVE 버튼과 방송 인박스(종) 버튼을 만든다. 종 위의 빨간 배지에 안 읽은 개수를 표시.
+    // 오른쪽 위에 LIVE 버튼과 방송 인박스(종) 버튼을 만든다(x: 종의 중심). 종 위의 빨간 배지에 안 읽은 개수를 표시.
     void addLiveButton(float x) {
         auto* nav = menu(this);
         nav->setZOrder(30);
         auto* sprite = ButtonSprite::create("LIVE", "bigFont.fnt", "GJ_button_06.png", .8f);
         sprite->setScale(.55f);
         auto* item = CCMenuItemSpriteExtra::create(sprite, this, menu_selector(SceneLayer::onLive));
-        item->setPosition({x - 40.f, m_window.height - 24.f});
         item->setID("versus-live-matches"_spr);
         nav->addChild(item);
         auto* bell = inboxBellSprite();
@@ -1362,9 +1399,11 @@ protected:
         m_inboxBadge->setPosition({25.f, 25.f});
         bell->addChild(m_inboxBadge, 5);
         auto* inbox = CCMenuItemSpriteExtra::create(bell, this, menu_selector(SceneLayer::onInbox));
-        inbox->setPosition({x + 6.f, m_window.height - 24.f});
         inbox->setID("versus-broadcast-inbox"_spr);
         nav->addChild(inbox);
+        // x는 종의 중심: 종의 오른쪽 끝을 기준으로 종, LIVE를 실제 폭과 화면 비례 간격으로 놓는다.
+        layoutRowRight({inbox, item}, x + drawnWidth(inbox) / 2.f, m_window.height - 24.f, rowGap(m_window.width),
+                       0.f);
         refreshInbox(0.f);
         schedule(schedule_selector(SceneLayer::refreshInbox), .5f);
     }

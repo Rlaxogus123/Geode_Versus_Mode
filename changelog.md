@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.6
+
+### Fixes
+- Main Versus screen (and Public Room / Ranked): the LIVE and notice (bell) buttons, and the Discord and patch notes buttons, could overlap on some phones. Those rows are now laid out from each button's real size, with gaps that follow the screen width.
+
 ## v1.0.5 (2026-11-03)
 
 ### Updates
