@@ -13,14 +13,25 @@ and put it in Geometry Dash's Geode mods folder (`geode/mods`). One file works o
 | Path | Contents |
 |---|---|
 | `src/` | The mod that runs in the game (C++, Geode SDK) |
+| `resources/` | Images (`art/`, `auras/`), sounds (`sounds/`) and third-party licenses (`licenses/`) |
+| `server/battle_rules.py` | The server's battle rules, as they run on the live server: how a progress report is checked, how the winner is decided, and how the game's anti-cheat detections are handled |
 
 - Code comments are written in Korean.
-- Image and sound assets are not included in this repository. Get the complete mod from the releases.
-- The Versus server is not part of this repository.
+- The rest of the Versus server (accounts, rooms, matchmaking, ratings, the database) is not part of this repository.
+
+## Anti-cheat
+
+Cheat detection runs inside the game, in this mod (`src/ExternalCheatMonitor.cpp`, `src/IntegrityMonitor.cpp`,
+`src/IntegrityFeatures.hpp`): during a battle with anti-cheat on, it checks the settings and the behaviour of the
+known hack menus (Mega Hack, Eclipse, QOLMod, Prism Menu) and whether a banned mod is loaded, and reports a
+detection as a code plus the feature names. Nothing else about the computer is read or sent. The server
+(`server/battle_rules.py`) only validates each report and decides the result; a detection makes that seat forfeit
+and cannot be withdrawn.
 
 ## License
 
-The source code is released under the [MIT License](LICENSE).
+The source code is released under the [MIT License](LICENSE). The images and sounds in `resources/` are not
+covered by it: they may only be used as part of Versus.
 
 - This project was developed with the help of an AI coding tool (Anthropic Claude).
 - Argon (GD account verification) is an MIT-licensed library by the Globed Team (`resources/licenses/argon-LICENSE.txt`).

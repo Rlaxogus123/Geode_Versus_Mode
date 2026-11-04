@@ -3,6 +3,7 @@
 ## v1.0.6
 
 ### Season 2
+- Both cups: when both players clear in the same number of attempts, the one who picked up more user coins wins (as in the other rooms). Only the same number of coins is still a draw (its rematch).
 - Standard Cup: the Music button can change the song too (Change Song). Your song plays instead of the cup's; choose "Versus (default)" to hear the cup's song again.
 
 ### Fixes
