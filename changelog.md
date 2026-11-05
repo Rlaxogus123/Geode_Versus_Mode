@@ -9,6 +9,9 @@
 ### Fixes
 - Main Versus screen (and Public Room / Ranked): the LIVE and notice (bell) buttons, and the Discord and patch notes buttons, could overlap on some phones. Those rows are now laid out from each button's real size, with gaps that follow the screen width.
 - Patch Notes, Achievements, Nickname Style, Finisher, Membership and Map Mode windows: their close button sat slightly off the top of the screen. The windows are a little shorter now.
+- Matches: when your game cannot reach the server for 15 seconds, a CONNECTION LOST warning now shows how long is left. After 30 seconds without a connection the server ends the match as a loss, and runs played in the meantime do not count. Before, only a small "Syncing with the server..." line appeared.
+- Match result card: it now says why a match ended early (Connection lost, Opponent disconnected, forfeit, pause timeout, anti-cheat). The reason used to be hidden behind the card.
+- The game now renews its sign-in in the background ahead of time. Before, a renewal that fell during a match paused the match connection until it finished.
 
 ## v1.0.5 (2026-11-03)
 

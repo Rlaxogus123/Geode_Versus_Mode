@@ -113,7 +113,9 @@ struct State {
     std::string battlePollEtag;
     PlayerProfile profile;
     std::optional<RoomInfo> room;
-    Clock::time_point expires;
+    // ID 토큰을 쓰지 않을 시각(만료)과, 그 전에 뒤에서 미리 갱신을 시작할 시각.
+    Clock::time_point expires, refreshAt;
+    bool tokenRefreshing = false;
     // 서버에서 마지막으로 응답을 받은 시각 (연결 끊김 판단에 사용).
     Clock::time_point lastContact = Clock::now();
     Clock::time_point nextHistoryAttempt = Clock::now();
@@ -154,6 +156,8 @@ struct State {
     Clock::time_point nextDrawAttempt;
     Clock::time_point nextDownloadReport;
     Clock::time_point lastBattleReport{};
+    // 서버가 내 자리를 마지막으로 확인한 시각(진행 보고 또는 heartbeat 성공).
+    Clock::time_point lastSeatAck{};
     Clock::time_point battleReportWantedAt{};
     Clock::time_point nextPauseSettle{};
     std::deque<PendingAttempt> attempts;
@@ -1825,6 +1829,7 @@ void heartbeat() {
             if (epoch != state().epoch) return;
             state().writing = false;
             state().maintenanceWriting = false;
+            if (success) state().lastSeatAck = Clock::now();
             auto const& room = state().room;
             bool const live = room && room->started && room->battle && room->battle->finishedAt == 0 && room->launch &&
                               room->launch->releasedAt > 0;
@@ -1944,6 +1949,15 @@ void saveIdentity(std::string const& refreshToken, std::string const& uid) {
 void forgetSavedRefreshToken() {
     Mod::get()->setSavedValue("firebase-refresh-token", std::string());
 }
+// Firebase ID 토큰은 발급 후 60분 유효하다. 50분까지만 쓰고(만료), 40분부터는 계속 쓰면서 뒤에서 미리
+// 갱신한다(refreshTokenInBackground). 그래서 대결 중에 만료가 와서 통신이 멈추는 일이 없다.
+constexpr auto kTokenUsable = std::chrono::minutes(50);
+constexpr auto kTokenRefreshAfter = std::chrono::minutes(40);
+void markTokenFresh() {
+    auto& s = state();
+    s.expires = Clock::now() + kTokenUsable;
+    s.refreshAt = Clock::now() + kTokenRefreshAfter;
+}
 // 서버가 준 커스텀 토큰으로 Firebase에 로그인해 이 GD 계정의 기존 Versus 신원으로 전환한다.
 void signInAs(std::string customToken, std::string uid) {
     if (customToken.empty() || uid.empty()) {
@@ -1975,7 +1989,7 @@ void signInAs(std::string customToken, std::string uid) {
                      s.profile.uid = uid;
                      s.token = token;
                      s.refreshToken = refresh;
-                     s.expires = Clock::now() + std::chrono::minutes(50);
+                     markTokenFresh();
                      saveIdentity(refresh, uid);
                      log::info("Versus: this device now plays as its GD account's Versus identity");
                      Notification::create(fmt::format("Versus progress loaded for {}", s.profile.name),
@@ -2152,10 +2166,56 @@ void authenticate(std::string key, bool refresh) {
         s.profile.uid = uid;
         s.token = token;
         s.refreshToken = refreshToken;
-        s.expires = Clock::now() + std::chrono::minutes(50);
+        markTokenFresh();
         saveIdentity(refreshToken, uid);
         syncAccount();
     });
+}
+// 토큰이 아직 쓸 수 있을 때(갱신 시각 ~ 만료 전) 뒤에서 새 ID 토큰을 받는다. connect와 달리
+// authenticating을 켜지 않으므로, 받는 동안에도 기존 토큰(과 서버 세션)으로 보고·폴링·heartbeat가 계속된다.
+// 실패하면 1분 뒤 다시 시도하고, 만료까지 끝내 못 받으면 예전처럼 connect가 갱신한다.
+void refreshTokenInBackground() {
+    auto& s = state();
+    if (s.tokenRefreshing || s.authenticating || s.refreshToken.empty() || s.token.empty() ||
+        Clock::now() < s.refreshAt || Clock::now() >= s.expires)
+        return;
+    auto key = s.apiKey.empty() ? configuredApiKey() : s.apiKey;
+    if (key.empty()) return;
+    s.tokenRefreshing = true;
+    s.refreshAt = Clock::now() + std::chrono::minutes(1);
+    auto request = web::WebRequest();
+    request.timeout(std::chrono::seconds(10));
+    request.param("key", std::move(key));
+    request.header("Content-Type", "application/x-www-form-urlencoded");
+    request.bodyString("grant_type=refresh_token&refresh_token=" + formEncode(s.refreshToken));
+    async::spawn(request.post("https://securetoken.googleapis.com/v1/token"),
+                 [before = s.token, uid = s.profile.uid](web::WebResponse response) {
+                     auto& s = state();
+                     s.tokenRefreshing = false;
+                     auto parsed = response.json();
+                     std::string token, refresh, owner;
+                     if (response.ok() && parsed && parsed.unwrap().isObject()) {
+                         auto const body = parsed.unwrap();
+                         token = stringAt(body, "id_token");
+                         refresh = stringAt(body, "refresh_token");
+                         owner = stringAt(body, "user_id");
+                     }
+                     if (token.empty() || refresh.empty() || owner != uid) {
+                         log::warn("Versus: sign-in refresh failed (HTTP {}); still signed in, retrying in a minute",
+                                   response.code());
+                         return;
+                     }
+                     // 그 사이 다른 로그인(계정 전환, 만료 후 재로그인)이 토큰을 바꿨으면 이 결과는 버린다.
+                     if (s.token != before || s.profile.uid != uid) return;
+                     s.token = token;
+                     // 지금 서버 세션은 그대로 쓴다(서버가 정한 만료까지). 다음 세션은 새 토큰으로 받는다.
+                     if (s.sessionBase == before) s.sessionBase = token;
+                     markTokenFresh();
+                     if (refresh != s.refreshToken) {
+                         s.refreshToken = refresh;
+                         saveIdentity(refresh, uid);
+                     }
+                 });
 }
 // Ranked 대기 중인 플레이어 목록(searchers)을 복원한다. 서버가 전체 목록 또는 변경분(rosterDelta:
 // drop/put)을 보내며, rosterTag가 이어지지 않으면 목록을 비워 다음 응답에서 전체를 받는다.
@@ -2464,6 +2524,9 @@ void Service::reportDownloadNow() {
 }
 bool Service::battleReportAvailable() const {
     return !state().writing && !state().polling && !busy();
+}
+std::chrono::steady_clock::time_point Service::lastSeatAck() const {
+    return state().lastSeatAck;
 }
 void Service::wantBattleReport(bool wanted) {
     state().battleReportWantedAt = wanted ? Clock::now() : Clock::time_point{};
@@ -4047,7 +4110,7 @@ void Service::reportBattle(BattlePlayerState progress, bool sendPosition, Done c
                 return;
             }
             if (auto fresh = response.header("ETag")) s.battlePollEtag = *fresh;
-            s.lastBattleReport = Clock::now();
+            s.lastBattleReport = s.lastSeatAck = Clock::now();
             callback(true, {});
         },
         {}, false, false, false, {}, "battle-report");
@@ -6427,6 +6490,7 @@ void Service::tick(float dt) {
     tickBroadcasts();
     tickMaintenance();
     refreshStaffList();
+    refreshTokenInBackground();
     if (!s.writing && !s.authenticating && !s.pendingActions.empty()) {
         auto next = std::move(s.pendingActions.front());
         s.pendingActions.pop_front();

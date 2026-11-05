@@ -339,6 +339,9 @@ public:
     int ackFailures = 0;
     // 서버에 닿지 못했다고 보는 시간(초)과 결과 확인(ack)에 연속 실패했을 때 그냥 나가는 횟수.
     static constexpr int kUnreachableSeconds = 15, kAckFailuresToLeave = 8;
+    // 서버는 한 자리에서 진행 보고도 heartbeat도 30초(BATTLE_STALE_MS) 동안 없으면 연결 끊김 패배로 끝낸다.
+    // 15초가 넘으면 화면 가운데에 크게 경고한다.
+    static constexpr float kSeatStaleSeconds = 30.f, kLinkWarnSeconds = 15.f;
     // 서버가 확인하기 전까지 다시 보낼 사망 상태와 재전송 횟수.
     std::optional<BattlePlayerState> pendingDeath;
     int pendingDeathSends = 0;
@@ -354,6 +357,8 @@ public:
     Weak<CCNode> hud;
     Weak<BattleHUD> playerHUD;
     Weak<CCLabelBMFont> status, returnStatus, antiCheatAlert;
+    Weak<CCNode> linkWarning;
+    Weak<CCLabelBMFont> linkWarningText;
     float statusScale = .65f;
     Weak<CCLabelBMFont> hostPercent, guestPercent;
     Weak<CCLayerColor> hostGauge, guestGauge;
@@ -1538,6 +1543,69 @@ public:
     bool syncBehind() const {
         return lastSync != Clock::time_point{} && Clock::now() - lastSync >= std::chrono::seconds(6);
     }
+    // 서버가 내 자리를 마지막으로 확인한 뒤 지난 시간(초). 진행 보고와 heartbeat 성공을 모두 본다.
+    float seatSilence() const {
+        auto const ack = std::max(lastSync, Service::get().lastSeatAck());
+        return std::chrono::duration<float>(Clock::now() - ack).count();
+    }
+    // 연결 끊김 경고. 서버에 닿지 않는 동안 뛴 판은 기록되지 않고, 30초가 지나면 서버가 이 자리를 연결 끊김
+    // 패배로 끝낸다(server/battle_rules.py seat_stale). 서버가 이미 플레이로 결과를 확정한 자리(클리어,
+    // 목숨 소진)는 끊겨도 지지 않으므로 띄우지 않는다. 점검 중에는 서버가 끊김을 세지 않으므로 띄우지 않는다.
+    void updateLinkWarning(BattleInfo const& snapshot) {
+        auto const& room = Service::get().room();
+        auto const& confirmed = host ? snapshot.host : snapshot.guest;
+        float const silent = seatSilence();
+        bool const show = !group && !finished && !leaving && room && room->launch && room->launch->releasedAt > 0 &&
+                          !Service::get().botBattle() && !Service::get().debugRoom() &&
+                          !Service::get().maintenance() && !local.forfeited && !confirmed.forfeited &&
+                          !finalByPlay(confirmed, localRules()) && silent >= kLinkWarnSeconds;
+        auto box = linkWarning.lock();
+        if (!show) {
+            if (box) box->setVisible(false);
+            return;
+        }
+        auto root = hud.lock();
+        if (!root) return;
+        auto const window = CCDirector::sharedDirector()->getWinSize();
+        float const width = std::min(window.width - 40.f, 340.f);
+        if (!box || box->getParent() != root.data()) {
+            if (box) box->removeFromParent();
+            auto* node = CCNode::create();
+            node->setID("connection-warning"_spr);
+            node->setPosition({window.width / 2.f, window.height * .64f});
+            auto* back = CCScale9Sprite::create("square02_small.png");
+            back->setContentSize({width, 64.f});
+            back->setColor(ccc3(60, 0, 8));
+            back->setOpacity(200);
+            node->addChild(back);
+            auto* title = CCLabelBMFont::create("CONNECTION LOST", "bigFont.fnt");
+            title->setColor(ccc3(255, 96, 96));
+            title->setPosition({0.f, 14.f});
+            title->limitLabelWidth(width - 24.f, .55f, .2f);
+            node->addChild(title);
+            auto* detail = CCLabelBMFont::create("", "chatFont.fnt");
+            detail->setAlignment(kCCTextAlignmentCenter);
+            detail->setPosition({0.f, -12.f});
+            node->addChild(detail);
+            root->addChild(node, 1001);
+            rebind(linkWarning, node);
+            rebind(linkWarningText, detail);
+            box = linkWarning.lock();
+        }
+        box->setVisible(true);
+        int const left = static_cast<int>(std::ceil(kSeatStaleSeconds - silent));
+        auto const text = left > 0 ? fmt::format("Your runs are not reaching the server.\n"
+                                                 "This match is lost in {} s if the connection does not return.",
+                                                 left)
+                                   : std::string("No connection for 30 s.\nThis match is probably lost already.");
+        if (auto detail = linkWarningText.lock(); detail && text != detail->getString()) {
+            detail->setString(text.c_str());
+            detail->limitLabelWidth(width - 24.f, .6f, .2f);
+        }
+    }
+    void hideLinkWarning() {
+        if (auto box = linkWarning.lock()) box->setVisible(false);
+    }
     // 점검 중이거나 보고가 3번 이상 실패하고 15초 이상 동기화되지 않았으면 서버에 닿지 않는 것으로 본다.
     bool serverUnreachable() const {
         if (Service::get().maintenance()) return true;
@@ -1597,6 +1665,25 @@ public:
         audio::play(audio::Cue::Finish);
         audio::startResultMusic();
     }
+    // 플레이가 아닌 이유(안티치트, 연결 끊김, 기권, 일시정지 초과)로 끝났을 때 그 사유. 아니면 빈 문구.
+    // 연결 끊김 = 진 쪽이 기권으로 기록됐고 안티치트가 아니며, 마지막 보고가 결과보다 25초 이상 앞섬.
+    struct ResultReason {
+        std::string text;
+        bool disconnected = false;
+    };
+    ResultReason resultReason(BattleInfo const& info) const {
+        if (info.draw) return {};
+        auto const& loserState = info.winnerUid == hostProfile.uid ? info.guest : info.host;
+        if (!loserState.forfeited && loserState.pausedAt <= 0) return {};
+        bool const won = info.winnerUid == uid;
+        bool const disconnected = loserState.forfeited && loserState.integrityCode.empty() &&
+                                  info.finishedAt - loserState.updatedAt >= 25'000;
+        if (!loserState.integrityCode.empty())
+            return {integrity::resultReason(loserState.integrityCode, won, loserState.integrityFeatures)};
+        if (disconnected) return {won ? "Opponent disconnected" : "Connection lost", true};
+        if (won) return {loserState.forfeited ? "Opponent forfeited" : "Opponent timed out"};
+        return {loserState.forfeited ? "Match forfeited" : "Pause timeout"};
+    }
     // 1v1 결과 화면을 만든다. 진행도 게이지, 승패 문구, 포기/연결 끊김 사유, 처형 연출 준비, 결과 확인 팝업과 타이머 바를 구성한다.
     void endVisual(BattleInfo const& info) {
         if (finished || leaving) return;
@@ -1605,6 +1692,7 @@ public:
             return;
         }
         replay::liveStop();
+        hideLinkWarning();
         exitFreePlay();
         if (local.inAttempt) {
             auto const& final = host ? info.host : info.guest;
@@ -1732,24 +1820,11 @@ public:
         }
         rebind(returnStatus, resultLabel(root, "", 0.f, -133.f, window.width - 40.f, .65f));
         if (auto footer = returnStatus.lock()) footer->setZOrder(40);
-        if (!info.draw) {
-            auto const& loserState = info.winnerUid == hostProfile.uid ? info.guest : info.host;
-            if (loserState.forfeited || loserState.pausedAt > 0) {
-                bool const disconnected = loserState.forfeited && loserState.integrityCode.empty() &&
-                                          info.finishedAt - loserState.updatedAt >= 25'000;
-                auto reasonText =
-                    !loserState.integrityCode.empty()
-                        ? integrity::resultReason(loserState.integrityCode, info.winnerUid == uid,
-                                                  loserState.integrityFeatures)
-                    : disconnected ? std::string(info.winnerUid == uid ? "Opponent disconnected" : "Connection lost")
-                    : info.winnerUid == uid
-                        ? (loserState.forfeited ? std::string("Opponent forfeited") : std::string("Opponent timed out"))
-                        : (loserState.forfeited ? std::string("Match forfeited") : std::string("Pause timeout"));
-                auto* reason = createCosmeticLabel(reasonText.c_str(), "chatFont.fnt");
-                reason->setScale(.75f);
-                reason->setPosition({window.width / 2.f, window.height / 2.f + 36.f});
-                decision->addChild(reason);
-            }
+        if (auto const why = resultReason(info); !why.text.empty()) {
+            auto* reason = createCosmeticLabel(why.text.c_str(), "chatFont.fnt");
+            reason->setScale(.75f);
+            reason->setPosition({window.width / 2.f, window.height / 2.f + 36.f});
+            decision->addChild(reason);
         }
         auto* a = icon(hostProfile, 1.8f);
         auto* b = icon(guestProfile, 1.8f);
@@ -1791,6 +1866,15 @@ public:
         popupLabel("MATCH RESULT", 0.f, 76.f, panelWidth - 24.f, .48f);
         auto* resultTitle = popupLabel(info.draw ? "DRAW" : winnerName + " WINS!", 0.f, 55.f, panelWidth - 24.f, .55f);
         if (!info.draw) styleNickname(resultTitle, winnerProfile.membership, winnerProfile.cosmetics);
+        // 기권·연결 끊김 등으로 끝났으면 카드에도 그 사유를 적는다(위의 발표 문구는 카드에 가려진다).
+        // 내가 연결 끊김으로 졌으면, 끊긴 뒤 뛴 판이 기록되지 않았다는 것도 함께 알린다.
+        if (auto const why = resultReason(info); !why.text.empty()) {
+            bool const won = info.winnerUid == uid;
+            auto* reason = popupLabel(why.disconnected && !won ? "Connection lost - runs played while offline did not count"
+                                                               : why.text,
+                                      0.f, 38.f, panelWidth - 24.f, .55f, "chatFont.fnt");
+            reason->setColor(won ? ccc3(150, 235, 170) : ccc3(255, 150, 150));
+        }
 
         constexpr float playerX = 82.f;
         auto* hostResultIcon = icon(hostProfile, !info.draw && info.winnerUid == hostProfile.uid ? 1.35f : 1.05f);
@@ -2140,6 +2224,7 @@ public:
         versus::percent::enforce(owner.data());
         returnRetry -= dt;
         if (finished || leaving) {
+            hideLinkWarning();
             resetCursor();
             if (holdImage.lock() || holdNode.lock()) {
                 endHoldVisual();
@@ -2294,6 +2379,7 @@ public:
                               : spectating && terminal(other, otherRules()) ? "Confirming match result..."
                               : syncBehind()                                ? "Syncing with the server..."
                                                                             : "");
+            updateLinkWarning(snapshot);
             if (auto frame = freePlayFrame.lock()) showLiveState(frame.data(), owner.data(), freePlayCaption);
         }
     }
