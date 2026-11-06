@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.6
+## v1.0.6 (2026-11-05)
 
 ### Season 2
 - Both cups: when both players clear in the same number of attempts, the one who picked up more user coins wins (as in the other rooms). Only the same number of coins is still a draw (its rematch).

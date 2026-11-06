@@ -7,7 +7,7 @@ namespace versus::firebase_config {
 inline constexpr auto DATABASE_URL = "https://54.180.43.196";
 inline constexpr auto WEB_API_KEY = "AIzaSyD1yoiFEhGa0oFm6XCzJ9DgRXs92UIvzpY";
 inline constexpr auto ROOT = "versus-v1";
-inline constexpr auto CLIENT_VERSION = "v1.0.5";
+inline constexpr auto CLIENT_VERSION = "v1.0.6";
 // 패치 노트를 자동으로 보여줄지 여부.
 inline constexpr bool AUTO_PATCH_NOTES = std::string_view(CLIENT_VERSION) != "v0.5.32";
 // 방 목록 최대 개수.
