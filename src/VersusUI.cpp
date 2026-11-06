@@ -412,10 +412,23 @@ public:
     }
 };
 
+// BMFont에 없는 한글은 기존 언어 설정에 맞춰 시스템 글꼴로 표시한다.
+void localizeSkipMusic(ButtonSprite* sprite, std::string const& caption) {
+    if (caption != "Skip Music" || !Mod::get()->getSavedValue<bool>("patch-notes-korean", true)) return;
+    sprite->m_label->setVisible(false);
+    auto* text = createSystemText("\xEC\x9D\x8C\xEC\x95\x85 \xEA\xB1\xB4\xEB\x84\x88\xEB\x9B\xB0\xEA\xB8\xB0", 20.f,
+                                  0.f, kCCTextAlignmentCenter, TextWeight::Bold);
+    text->setScale(
+        std::min(1.f, (sprite->getContentSize().width - 14.f) / std::max(1.f, text->getContentSize().width)));
+    text->setPosition(sprite->getContentSize() / 2.f);
+    sprite->addChild(text, 5);
+}
+
 // goldFont 텍스트 버튼(ButtonSprite)을 만들어 parent 메뉴에 추가한다.
 CCMenuItemSpriteExtra* button(CCMenu* parent, CCObject* target, SEL_MenuHandler action, std::string const& text,
                               CCPoint position, float scale = .58f, char const* background = "GJ_button_01.png") {
     auto* sprite = ButtonSprite::create(text.c_str(), "goldFont.fnt", background);
+    localizeSkipMusic(sprite, text);
     sprite->setScale(scale);
     auto* item = CCMenuItemSpriteExtra::create(sprite, target, action);
     item->setPosition(position);
@@ -4437,7 +4450,7 @@ class RoomLayer : public SceneLayer {
     float m_emoteCooldown = 0.f;
     bool m_pending = false;
     bool m_sendingEmote = false;
-    bool m_downloading = false;
+    bool m_downloading = false, m_readyAfterDownload = false;
     bool m_cached = false;
     bool m_renderQueued = false;
     uint64_t m_downloadGeneration = 0;
@@ -4542,6 +4555,11 @@ class RoomLayer : public SceneLayer {
             owner->m_cached = success && mapCached(levelID);
             if (owner->m_cached) preloadBattleAssets();
             owner->m_cacheError = owner->m_cached ? std::string() : std::move(detail);
+            bool const ready = std::exchange(owner->m_readyAfterDownload, false);
+            auto const& room = Service::get().room();
+            if (ready && owner->m_cached && mapAudioSkipped(levelID) && room &&
+                !(Service::get().isHost() ? room->hostReady : room->guestReady))
+                owner->onReady(nullptr);
             owner->requestRender();
         });
     }
@@ -4747,6 +4765,7 @@ class RoomLayer : public SceneLayer {
         }
         if (m_mapID != room.level.id) {
             ++m_downloadGeneration;
+            m_readyAfterDownload = false;
             m_mapID = room.level.id;
             m_cached = room.level.id > 0 && mapCached(room.level.id);
             m_downloading = false;
@@ -4895,7 +4914,7 @@ class RoomLayer : public SceneLayer {
         // (readyControl). 받은 맵이면 눌러야 할 때 테두리가 깜박인다.
         auto const control =
             readyControl(room.started || drawingMap(room), m_pending, host, room.level.id > 0 || needsRandomDraw(room),
-                         m_cached || needsRandomDraw(room), m_downloading, myReady);
+                         m_cached || needsRandomDraw(room), m_downloading, myReady, mapAudioSkipped(room.level.id));
         if (!(room.mapPool && control.action == ReadyAction::ChooseMap)) {
             auto* ready =
                 button(actions, this, menu_selector(RoomLayer::onReady), control.caption,
@@ -5199,9 +5218,10 @@ class RoomLayer : public SceneLayer {
             return;
         m_cached = mapCached(room->level.id);
         bool const host = Service::get().isHost();
-        auto const control = readyControl(
-            room->started || drawingMap(*room), m_pending, host, room->level.id > 0 || needsRandomDraw(*room),
-            m_cached || needsRandomDraw(*room), m_downloading, host ? room->hostReady : room->guestReady);
+        auto const control =
+            readyControl(room->started || drawingMap(*room), m_pending, host,
+                         room->level.id > 0 || needsRandomDraw(*room), m_cached || needsRandomDraw(*room),
+                         m_downloading, host ? room->hostReady : room->guestReady, mapAudioSkipped(room->level.id));
         if (control.action == ReadyAction::None) return;
         if (control.action == ReadyAction::ChooseMap) {
             if (room->mapPool)
@@ -5212,6 +5232,11 @@ class RoomLayer : public SceneLayer {
         }
         if (control.action == ReadyAction::Download) {
             beginDownload();
+            requestRender();
+            return;
+        }
+        if (control.action == ReadyAction::SkipMusic) {
+            m_readyAfterDownload = skipMapAudio(room->level.id);
             requestRender();
             return;
         }
@@ -7740,6 +7765,7 @@ class RankedLayer final : public SceneLayer {
                 season2FitAction(true);
             } else {
                 auto* sprite = ButtonSprite::create(text.c_str(), "goldFont.fnt", "GJ_button_01.png");
+                localizeSkipMusic(sprite, text);
                 sprite->setScale(.55f);
                 m_action->setSprite(sprite);
                 m_s2ActionKey.clear();
@@ -7979,7 +8005,8 @@ class RankedLayer final : public SceneLayer {
                                   .c_str()
                         : match.selectedMap ? fmt::format("{} / {}", match.selectedMap->name, progress.detail()).c_str()
                                             : "Selecting map...");
-                    setAction("GET READY", false);
+                    bool const skip = canSkipMusic();
+                    setAction(skip ? "Skip Music" : "GET READY", skip);
                 }
             } else {
                 m_status->setString("BATTLE READY");
@@ -8369,6 +8396,15 @@ class RankedLayer final : public SceneLayer {
                detail.find("contains no level data") != std::string::npos ||
                detail.find("has no downloadable audio URL") != std::string::npos;
     }
+    // 다운로드 중인 현재 추첨에서만 음악 건너뛰기를 허용한다.
+    bool canSkipMusic() const {
+        if (m_pending || m_ackPending || m_transitioning || m_assetsReady || !m_assetPreparing || !m_state ||
+            !m_state->match)
+            return false;
+        auto const& match = *m_state->match;
+        return match.state == "preparing" && !match.ownReady && match.selectedMap && m_assetMatch == match.drawId &&
+               !mapAudioSkipped(match.selectedMap->id);
+    }
     // 선택된 맵(과 음악)을 로컬에 받아 둔다. 룰렛 연출이 끝나기 전에는 시작하지 않는다.
     // 실패 시 맵 문제가 아니고 횟수/시간이 남았으면 2초 뒤 재시도하고,
     // 그렇지 않으면 실패로 기록한 뒤 서버에 맵 리롤을 요청한다.
@@ -8395,6 +8431,9 @@ class RankedLayer final : public SceneLayer {
                 owner->m_assetPreparing = false;
                 owner->m_assetsReady = ok;
                 owner->m_readyTimer = 0.f;
+                if (ok && owner->m_state && owner->m_state->match && owner->m_state->match->selectedMap &&
+                    mapAudioSkipped(owner->m_state->match->selectedMap->id))
+                    owner->m_readyTimer = ranked::READY_RESEND_SECONDS;
                 if (ok && detail.rfind("Song ", 0) == 0) owner->m_songMissingDraw = id;
                 if (ok && !detail.empty() && owner->m_audioNoticeDraw != id) {
                     owner->m_audioNoticeDraw = id;
@@ -8417,8 +8456,10 @@ class RankedLayer final : public SceneLayer {
                     owner->render();
                     owner->requestReroll();
                 }
+                owner->render();
             },
             rankedAudioNeed());
+        render();
     }
     std::string m_audioNoticeDraw;
     std::string m_songMissingDraw;
@@ -8900,6 +8941,11 @@ class RankedLayer final : public SceneLayer {
     // 결과 화면에서 눌렀으면 그 결과를 닫고 새로 탐색한다.
     void onMatch(CCObject*) {
         if (m_pending || m_ackPending || !m_state || (m_lastResult && !m_resultAcknowledged)) return;
+        if (m_state->match && m_state->match->state == "preparing") {
+            if (canSkipMusic()) skipMapAudio(m_state->match->selectedMap->id);
+            render();
+            return;
+        }
         if (season2DrawWaiting()) return;
         m_s2DrawShown = -1.f;
         if (m_state->blockedUntil > Service::get().serverNow() && !m_state->match) {
@@ -9318,6 +9364,7 @@ class RankedLayer final : public SceneLayer {
             if (m_s2ActionKey.empty()) return;
             m_s2ActionKey.clear();
             auto* sprite = ButtonSprite::create(m_actionText.c_str(), "goldFont.fnt", "GJ_button_01.png");
+            localizeSkipMusic(sprite, m_actionText);
             sprite->setScale(.55f);
             m_action->setSprite(sprite);
             enabled(m_action, m_action->isEnabled());
@@ -9347,6 +9394,7 @@ class RankedLayer final : public SceneLayer {
         m_s2ActionKey = std::move(key);
         auto* sprite = ButtonSprite::create(m_actionText.c_str(), static_cast<int>(std::lround(target)), true,
                                             "goldFont.fnt", "GJ_button_01.png", kS2ActionH, text);
+        localizeSkipMusic(sprite, m_actionText);
         m_action->setSprite(sprite);
         enabled(m_action, m_action->isEnabled());
     }

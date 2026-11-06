@@ -4,7 +4,7 @@
 
 namespace versus {
 // 버튼이 수행할 동작. None이면 비활성.
-enum class ReadyAction { None, ChooseMap, Download, Ready, Unready };
+enum class ReadyAction { None, ChooseMap, Download, SkipMusic, Ready, Unready };
 // 버튼 문구와 동작 한 쌍.
 struct ReadyControl {
     char const* caption;
@@ -13,14 +13,17 @@ struct ReadyControl {
 };
 
 // 방 상태에 따라 버튼을 정한다. 우선순위: 시작됨 > 서버 응답 대기 > 맵 없음(방장은 맵 선택)
-// > 이미 준비함(해제) > 레벨이 캐시됨(준비) > 다운로드.
+// > 이미 준비함(해제) > 레벨이 캐시됨(준비) > 다운로드 중 음악 건너뛰기 > 다운로드.
 inline ReadyControl readyControl(bool started, bool pending, bool host, bool hasMap, bool cached, bool downloading,
-                                 bool ready) {
+                                 bool ready, bool audioSkipped = false) {
     if (started) return {"Preparing", ReadyAction::None};
     if (pending) return {"Updating...", ReadyAction::None};
     if (!hasMap) return {host ? "Choose Map" : "Wait for Map", host ? ReadyAction::ChooseMap : ReadyAction::None};
     if (ready) return {"Unready", ReadyAction::Unready};
     if (cached) return {"Ready", ReadyAction::Ready};
-    return {downloading ? "Downloading..." : "Download", ReadyAction::Download};
+    if (downloading)
+        return {audioSkipped ? "Downloading..." : "Skip Music",
+                audioSkipped ? ReadyAction::None : ReadyAction::SkipMusic};
+    return {"Download", ReadyAction::Download};
 }
 }

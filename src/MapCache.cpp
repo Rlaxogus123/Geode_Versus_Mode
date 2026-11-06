@@ -10,6 +10,7 @@
 #include <Geode/binding/MusicDownloadManager.hpp>
 #include <Geode/binding/MusicDownloadDelegate.hpp>
 #include <Geode/binding/SongInfoObject.hpp>
+#include <Geode/cocos/extensions/network/HttpRequest.h>
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -63,6 +64,8 @@ class Cache final : public CCNode, public LevelDownloadDelegate, public MusicDow
     };
     // 맵별 건너뛰기 기록.
     std::map<int, Waiver> waivers;
+    std::string skippedRoom, skippedDraw;
+    int64_t skippedLevel = 0;
     // 미리 받기 중 포기한 오디오(맵과 무관하게 현재 작업 동안만 유지).
     std::set<int> droppedSongs, droppedSounds;
     Clock::time_point waitFrom;
@@ -101,8 +104,48 @@ class Cache final : public CCNode, public LevelDownloadDelegate, public MusicDow
 public:
     // 맵 작업을 취소한다. 대기열에서 빼고 진행 중이면 실패로 마무리한다.
     void cancel(int64_t id) {
+        if (skippedLevel == id) skippedLevel = 0;
         std::erase_if(queue, [id](auto const& job) { return job.id == id; });
         if (current && current->id == id) finish(false, "Map selection changed.");
+    }
+    // 선택 범위는 방/레벨/추첨에 묶고, 장면 전환 중에는 유지한다.
+    bool audioSkipped(int64_t id) {
+        auto const& room = versus::Service::get().room();
+        if (!room || room->id != skippedRoom || room->level.id != skippedLevel ||
+            (room->mapDraw ? room->mapDraw->id : std::string()) != skippedDraw)
+            skippedLevel = 0;
+        return id > 0 && skippedLevel == id;
+    }
+    bool skipAudio(int64_t id) {
+        auto const& room = versus::Service::get().room();
+        if (!room || room->level.id != id || id <= 0 || id > std::numeric_limits<int>::max()) return false;
+        if ((!current || current->id != id) &&
+            std::none_of(queue.begin(), queue.end(), [id](auto const& job) { return job.id == id; }))
+            return false;
+        skippedRoom = room->id;
+        skippedDraw = room->mapDraw ? room->mapDraw->id : std::string();
+        skippedLevel = id;
+        if (current && current->id == id) {
+            auto* music = MusicDownloadManager::sharedState();
+            // GD의 stopDownload와 같은 방식으로 이 작업이 요청한 오디오만 취소한다.
+            auto stop = [music](char const* key) {
+                if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(music->getDLObject(key)))
+                    request->setShouldCancel(true);
+                music->removeDLFromActive(key);
+            };
+            for (int song : requestedSongs) stop(music->getSongDownloadKey(song));
+            for (int sound : requestedSounds) stop(music->getSFXDownloadKey(sound));
+            requestedSongs.clear();
+            requestedSounds.clear();
+            // 노래 정보 요청은 메타데이터만 받으므로 완료되어도 오디오를 시작하지 않는다.
+            requestedInfo.clear();
+            // 오디오 실패 직후 눌러도 레벨 오류까지 숨기지는 않는다.
+            if (auto* value = level(static_cast<int>(id)); value && !platformer(value)) {
+                failure.clear();
+                began = progressed = Clock::now();
+            }
+        }
+        return true;
     }
     // 싱글턴 생성. 스케줄러에 등록해 매 프레임 update를 받는다.
     static Cache& get() {
@@ -198,6 +241,7 @@ public:
     bool ready(int id, AudioNeed need = AudioNeed::All) {
         auto* value = level(id);
         if (!value || value->m_levelString.empty() || platformer(value)) return false;
+        if (audioSkipped(id)) return true;
         auto const& [audio, effects] = assetsFor(value);
         auto* manager = MusicDownloadManager::sharedState();
         bool const ranked = need != AudioNeed::All, noAudio = need == AudioNeed::RankedNoAudio;
@@ -212,6 +256,7 @@ public:
     // Ranked에서 건너뛴 오디오가 있으면 사용자에게 보여 줄 안내 문구를 만든다(없으면 빈 문자열).
     // RankedNoAudio면 이 맵을 무음으로 기록한다.
     std::string skipped(int id, AudioNeed need) {
+        if (audioSkipped(id)) return {};
         if (need == AudioNeed::All) return {};
         auto* value = level(id);
         if (!value) return {};
@@ -456,6 +501,7 @@ public:
     // 매 프레임(0.2초 간격으로 진행): 대기열에서 작업을 꺼내고, 레벨을 받고, 필요한 오디오를 최대 3개씩 동시에 내려받는다.
     void update(float dt) override {
         unsaveNow();
+        audioSkipped(skippedLevel);
         timer -= dt;
         if (timer > 0.f) return;
         timer = .2f;
@@ -501,6 +547,12 @@ public:
             pendingWasSaved = manager->getSavedLevel(pendingID) != nullptr;
             manager->m_levelDownloadDelegate = this;
             manager->downloadLevel(pendingID, false, 0);
+            return;
+        }
+        // 건너뛰기는 레벨 다운로드/검증 후에만 완료하며, 추가 오디오 요청을 만들지 않는다.
+        if (audioSkipped(current->id)) {
+            bool const valid = !value->m_levelString.empty() && !platformer(value);
+            finish(valid, valid ? std::string() : versus::kPlatformerMapMessage);
             return;
         }
         // 레벨이 준비됐으면 필요한 오디오 목록을 잡고 음악 다운로드 델리게이트를 등록한다.
@@ -596,7 +648,7 @@ public:
                     requestedInfo.insert(i);
                     ++infoAttempts[i];
                     ++pendingAssets;
-                    music->getSongInfo(i, true);
+                    music->getSongInfo(i, false);
                     continue;
                 }
             }
@@ -658,17 +710,20 @@ MapDownloadProgress mapDownloadProgress(int64_t id, bool ranked) {
     result.soundsTotal = static_cast<int>(sounds.size());
     auto* music = MusicDownloadManager::sharedState();
     auto& cache = Cache::get();
+    bool const skipAudio = cache.audioSkipped(id);
     int const map = static_cast<int>(id);
     double units = 1.;
     for (int song : songs) {
-        bool const skipped = ranked && !music->isSongDownloaded(song) && cache.waived(map, song, false);
+        bool const skipped =
+            !music->isSongDownloaded(song) && (skipAudio || (ranked && cache.waived(map, song, false)));
         bool const done = music->isSongDownloaded(song) || skipped;
         result.songsDone += done;
         result.songsSkipped += skipped;
         units += done ? 1. : std::clamp(music->getDownloadProgress(song), 0, 99) / 100.;
     }
     for (int sound : sounds) {
-        bool const skipped = ranked && !music->isSFXDownloaded(sound) && cache.waived(map, sound, true);
+        bool const skipped =
+            !music->isSFXDownloaded(sound) && (skipAudio || (ranked && cache.waived(map, sound, true)));
         bool const done = music->isSFXDownloaded(sound) || skipped;
         result.soundsDone += done;
         result.soundsSkipped += skipped;
@@ -721,6 +776,12 @@ int mapLocalBest(int64_t id) {
 // 요구 수준에 맞게 이미 준비된 맵인지.
 bool mapCached(int64_t id, AudioNeed need) {
     return id > 0 && id <= std::numeric_limits<int>::max() && Cache::get().ready(static_cast<int>(id), need);
+}
+bool skipMapAudio(int64_t id) {
+    return Cache::get().skipAudio(id);
+}
+bool mapAudioSkipped(int64_t id) {
+    return Cache::get().audioSkipped(id);
 }
 // 맵 준비 요청의 공개 진입점. keepSaved이면 GD Saved에 계속 남긴다.
 void ensureMapCached(int64_t id, Done callback, AudioNeed need, bool prefetch, bool keepSaved) {

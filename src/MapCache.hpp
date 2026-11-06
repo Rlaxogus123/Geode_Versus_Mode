@@ -47,6 +47,10 @@ void dropFromSaved(int64_t levelID, GJGameLevel* level);
 bool inGdSaved(int64_t levelID);
 // 해당 맵의 준비 작업(대기열 포함)을 취소한다.
 void cancelMapPreparation(int64_t levelID);
+// 현재 방의 선택된 맵에서 남은 음악/효과음을 건너뛴다. 레벨 데이터는 계속 받는다.
+bool skipMapAudio(int64_t levelID);
+// 방이나 선택된 맵(추첨)이 바뀌면 건너뛰기 선택을 해제한다.
+bool mapAudioSkipped(int64_t levelID);
 // 배틀 화면에서 쓸 폰트/스프라이트를 미리 로드해 둔다.
 void preloadBattleAssets();
 // 메모리에 있거나 GD에 저장된 레벨 객체를 돌려준다(없으면 nullptr).
