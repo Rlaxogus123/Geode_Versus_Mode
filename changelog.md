@@ -13,6 +13,9 @@
 - Match result card: it now says why a match ended early (Connection lost, Opponent disconnected, forfeit, pause timeout, anti-cheat). The reason used to be hidden behind the card.
 - The game now renews its sign-in in the background ahead of time. Before, a renewal that fell during a match paused the match connection until it finished.
 
+### Releases
+- Releases are built from this repository only (images and sounds included; no other repository or secret), come with a GitHub build attestation, and can be rebuilt and compared byte for byte. See "Verifying a release" in the README.
+
 ## v1.0.5 (2026-11-03)
 
 ### Updates

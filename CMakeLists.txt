@@ -37,6 +37,11 @@ if(MSVC)
     target_link_options(${PROJECT_NAME} PRIVATE
         "/MAP:${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/tipp7.versus.map")
 endif()
+if(WIN32)
+    # PE 헤더의 시각 칸에 링크한 시각 대신 내용의 해시를 넣는다(/Brepro).
+    # 같은 소스·같은 도구로 다시 빌드하면 바이트까지 같은 DLL이 나와야 GitHub 릴리스를 재현해 확인할 수 있다.
+    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:/Brepro")
+endif()
 
 # GEODE_SDK 환경 변수로 SDK 위치를 찾는다.
 set(GEODE_SDK_PATH "$ENV{GEODE_SDK}")

@@ -1,19 +1,25 @@
 name: Build and release
 
-# 태그(vX.Y.Z)를 push하면 이 저장소의 코드로 모든 플랫폼을 빌드해 GitHub Release에 올린다.
-# 이미지·사운드는 비공개 에셋 저장소에서 빌드할 때만 가져온다 (secrets.ASSETS_TOKEN).
-# 태그에 '-'가 있으면(예: v1.0.5-test1) 테스트용 프리릴리스로 올라가고, 게임 업데이트에는 쓰이지 않는다.
+# 태그(vX.Y.Z)를 push하면 이 저장소의 코드와 리소스(resources/)만으로 모든 플랫폼을 빌드해 GitHub Release에 올린다.
+# 다른 저장소나 비밀 값(secrets)은 쓰지 않는다. 쓰는 토큰은 GitHub가 실행마다 주는 github.token(릴리스 업로드)뿐이다.
+# 태그에 '-'가 있으면(예: v1.0.6-test1) 테스트용 프리릴리스로 올라가고, 게임 업데이트에는 쓰이지 않는다.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  # Geode CLI 버전 고정(v1.0.5를 빌드할 때의 최신 릴리스). 빌드 액션도 아래에서 커밋으로 고정한다(main, 2026-11-03).
+  # 둘 중 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는 보장이 없어진다.
+  GEODE_CLI: v4.0.0
 
 jobs:
   build:
@@ -34,56 +40,104 @@ jobs:
       - name: Check the tag against mod.json
         shell: bash
         run: |
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            echo "Run this on a tag (Use workflow from: vX.Y.Z)"; exit 1
+          fi
           version=$(python3 -c "import json;print(json.load(open('mod.json'))['version'])")
           tag="${GITHUB_REF_NAME%%-*}"
           if [ "$tag" != "$version" ]; then
             echo "Tag $GITHUB_REF_NAME does not match mod.json version $version"; exit 1
           fi
 
-      - name: Get the assets
-        uses: actions/checkout@v5
-        with:
-          repository: Rlaxogus123/Geode_Versus_Assets
-          token: ${{ secrets.ASSETS_TOKEN }}
-          path: _assets
-
-      - name: Put the assets in place
+      - name: Check the resources
         shell: bash
         run: |
           for folder in sounds art auras; do
-            cp _assets/$folder/* resources/$folder/
+            count=$(find resources/$folder -type f | wc -l)
+            echo "resources/$folder: $count"
+            if [ "$count" -eq 0 ]; then echo "resources/$folder is empty"; exit 1; fi
           done
-          rm -rf _assets
-          ls resources/sounds | wc -l; ls resources/art | wc -l; ls resources/auras | wc -l
+
+      - name: Toolchain
+        shell: bash
+        run: |
+          # 재현이 안 될 때 어떤 도구가 달랐는지 보려고 남긴다.
+          echo "runner: $ImageOS $ImageVersion"
+          clang --version | head -1 || true
+          cmake --version | head -1 || true
+          if [ "$RUNNER_OS" = "macOS" ]; then xcodebuild -version | head -1; fi
 
       - name: Build
-        uses: geode-sdk/build-geode-mod@main
+        uses: geode-sdk/build-geode-mod@61a56c697aea9655e3f31c6c1b83870431f30434
         with:
           combine: true
+          cli: ${{ env.GEODE_CLI }}
           target: ${{ matrix.config.target }}
           # 코드 생성기(Codegen)도 고정한 바인딩 커밋에서 직접 빌드한다 (미리 빌드된 최신본은 형식이 다름).
-          configure-args: -DVERSUS_BOOTSTRAP=OFF -DSKIP_BUILDING_CODEGEN=OFF ${{ matrix.config.args }}
+          configure-args: -DSKIP_BUILDING_CODEGEN=OFF ${{ matrix.config.args }}
           # 라이브 빌드와 같은 GD 바인딩 커밋으로 고정한다 (최신 main은 SDK 5.7.1과 안 맞음).
           bindings-ref: 7f6c2a75742856de88dad354e576dcff8a28e881
 
   release:
-    name: Release
-    runs-on: ubuntu-latest
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Reproduce' || 'Release' }}
+    runs-on: ubuntu-24.04
     needs: build
+    permissions:
+      contents: write      # 릴리스 업로드
+      id-token: write      # 빌드 출처 증명(attestation) 서명
+      attestations: write
     steps:
       - uses: actions/checkout@v5
 
       - name: Combine the platforms
         id: combine
-        uses: geode-sdk/build-geode-mod/combine@main
+        uses: geode-sdk/build-geode-mod/combine@61a56c697aea9655e3f31c6c1b83870431f30434
+        with:
+          cli: ${{ env.GEODE_CLI }}
+          # zstd로 묶으면 Geode 5.9.0보다 오래된 로더가 열지 못한다. v1.0.5까지와 같이 deflate.
+          zstd: false
+          optimize-pngs: true
 
-      - name: Prepare the release files
-        id: files
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Package reproducibly and check it against the repository
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --quiet pillow==11.3.0
           mkdir release
-          cp "${{ steps.combine.outputs.build-output }}/tipp7.versus.geode" release/
+          # 항목 이름순, 시각은 태그 커밋 시각, deflate 9: 같은 내용이면 같은 파일.
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          python tools/geode_package.py normalize \
+            "${{ steps.combine.outputs.build-output }}/tipp7.versus.geode" release/tipp7.versus.geode
+          # 바이너리 5개를 뺀 모든 항목이 이 저장소의 파일과 같은지(PNG는 픽셀, 텍스트는 내용).
+          python tools/geode_package.py check release/tipp7.versus.geode
+          python tools/geode_package.py list release/tipp7.versus.geode > release/contents.sha256
+
+      - name: Compare with the published release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p tipp7.versus.geode -D published
+          if python tools/geode_package.py compare published/tipp7.versus.geode release/tipp7.versus.geode | tee compare.txt; then
+            result="Reproduced: the rebuild of $GITHUB_REF_NAME is byte-for-byte the published tipp7.versus.geode"
+          else
+            result="NOT reproduced: see the entries that differ"
+          fi
+          { echo "### $result"; echo '```'; cat compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "$result"
+          case "$result" in Reproduced*) ;; *) exit 1 ;; esac
+
+      - name: Prepare the release files
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
           version=$(python3 -c "import json;print(json.load(open('mod.json'))['version'])")
           python3 - "$version" <<'PY'
           import hashlib, json, os, sys, zipfile
@@ -93,13 +147,12 @@ jobs:
           with zipfile.ZipFile(path) as package:
               names = package.namelist()
               meta = json.loads(package.read("mod.json"))
+              mac = package.read("tipp7.versus.dylib")
           assert meta["id"] == "tipp7.versus", meta["id"]
           assert meta["version"].lstrip("v") == version, meta["version"]
           for binary in ("tipp7.versus.dll", "tipp7.versus.dylib", "tipp7.versus.ios.dylib",
                          "tipp7.versus.android32.so", "tipp7.versus.android64.so"):
               assert binary in names, f"missing {binary}"
-          with zipfile.ZipFile(path) as package:
-              mac = package.read("tipp7.versus.dylib")
           # macOS 바이너리는 Intel·Apple Silicon 공용(universal, FAT 헤더)이어야 한다.
           assert mac[:4] == bytes.fromhex("cafebabe"), "macOS binary is not universal"
           repo = os.environ["GITHUB_REPOSITORY"]
@@ -115,15 +168,31 @@ jobs:
               "mandatory": True,
           }
           json.dump(manifest, open("release/manifest.json", "w"), indent=2)
-          # 릴리스 노트: changelog.md 맨 위 버전 항목
+          # 릴리스 노트: changelog.md 맨 위 버전 항목 + 확인 방법
           text = open("changelog.md", encoding="utf-8").read()
           section = "## v" + text.split("\n## v")[1].split("\n## ")[0] if "\n## v" in text else ""
-          open("release/notes.md", "w", encoding="utf-8").write(section.strip() + "\n\n" +
-              f"SHA-256: `{manifest['sha256']}`\n")
+          verify = (
+              "### Verify this release\n"
+              f"- Built by this repository's workflow from tag `{tag}` only (no other repository, no secrets).\n"
+              f"- Provenance: `gh attestation verify tipp7.versus.geode --repo {repo}`\n"
+              "- Contents: `python3 tools/geode_package.py check tipp7.versus.geode` (everything but the five "
+              "binaries is the repository's own files); per-file SHA-256 in `contents.sha256`.\n"
+              "- Rebuild: run the workflow on this tag (Actions > Build and release > Run workflow); it rebuilds "
+              "and compares byte for byte.\n"
+          )
+          open("release/notes.md", "w", encoding="utf-8").write(
+              section.strip() + "\n\n" + verify + f"\nSHA-256: `{manifest['sha256']}`\n")
           print(json.dumps(manifest, indent=2))
           PY
 
+      - name: Attest the package
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: release/tipp7.versus.geode
+
       - name: Publish
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -132,5 +201,6 @@ jobs:
           extra=""
           case "$GITHUB_REF_NAME" in *-*) extra="--prerelease" ;; *) extra="--latest" ;; esac
           gh release create "$GITHUB_REF_NAME" release/tipp7.versus.geode release/manifest.json \
+            release/contents.sha256 \
             --repo "$GITHUB_REPOSITORY" --title "Versus ${GITHUB_REF_NAME#v}" \
             --notes-file release/notes.md $extra
