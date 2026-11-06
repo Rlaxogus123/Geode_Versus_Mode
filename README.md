@@ -19,17 +19,6 @@ and put it in Geometry Dash's Geode mods folder (`geode/mods`). One file works o
 - Code comments are written in Korean.
 - The rest of the Versus server (accounts, rooms, matchmaking, ratings, the database) is not part of this repository.
 
-## Skip Music
-
-During a map download, the Ready button in Classic/Group rooms and the main button in Ranked become
-**Skip Music** (**음악 건너뛰기** with the saved Korean language choice). Skipping cancels the remaining
-song and sound-effect downloads requested by Versus. Once valid level data is available, you are marked ready
-through the normal readiness flow. Already downloaded audio is kept and can still play.
-
-The choice applies to the selected map in the current room, including match loading; changing rooms,
-maps or draws clears it. It does not change the ranked **Always Download Song** preference.
-See [the test guide](tests/README.md) for automated checks and the in-game checklist.
-
 ## Anti-cheat
 
 Cheat detection runs inside the game, in this mod (`src/ExternalCheatMonitor.cpp`, `src/IntegrityMonitor.cpp`,
