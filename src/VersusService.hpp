@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -876,6 +877,9 @@ public:
     void reportDownloadNow();
     bool battleReportAvailable() const;
     void wantBattleReport(bool wanted);
+    // 서버가 내 자리를 마지막으로 확인한 시각(진행 보고 또는 heartbeat 성공). 서버는 이게 30초 넘게 없으면
+    // 연결 끊김 패배로 본다.
+    std::chrono::steady_clock::time_point lastSeatAck() const;
     void fetchRooms(RoomListCallback callback);
     void fetchHistory(HistoryCallback callback);
     void fetchPlayerHistory(std::string uid, HistoryCallback callback);
