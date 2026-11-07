@@ -679,6 +679,7 @@ public:
 
     // 필요한 노래와 효과음을 동시에 최대 3개씩 내려받는다. 모두 있으면 true.
     bool resourcesReady() {
+        if (versus::mapAudioSkipped(levelID)) return true;
         auto* music = MusicDownloadManager::sharedState();
         bool needsContentURL =
             std::any_of(effects.begin(), effects.end(), [music](int id) { return !music->isSFXDownloaded(id); }) ||

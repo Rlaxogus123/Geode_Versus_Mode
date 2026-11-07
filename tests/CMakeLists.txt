@@ -1,0 +1,10 @@
+# Geode SDK와 게임 없이 실행하는 준비 버튼 회귀 테스트.
+cmake_minimum_required(VERSION 3.21)
+project(VersusTests LANGUAGES CXX)
+enable_testing()
+add_executable(room-controls RoomControls.cpp)
+target_compile_features(room-controls PRIVATE cxx_std_17)
+if(MSVC)
+    target_compile_options(room-controls PRIVATE /utf-8)
+endif()
+add_test(NAME room-controls COMMAND room-controls)

@@ -849,7 +849,7 @@ class GroupRoomLayer : public SceneLayer {
     bool m_sortWins = false, m_notReadyOnly = false;
     float m_filterDelay = -1.f;
     int64_t m_mapID = 0;
-    bool m_cached = false, m_downloading = false;
+    bool m_cached = false, m_downloading = false, m_readyAfterDownload = false;
     uint64_t m_downloadGeneration = 0;
     std::string m_cacheError;
     float m_progressElapsed = 0.f;
@@ -1305,6 +1305,11 @@ class GroupRoomLayer : public SceneLayer {
                             owner->m_cached = success && mapCached(levelID);
                             if (owner->m_cached) preloadBattleAssets();
                             owner->m_cacheError = owner->m_cached ? std::string() : std::move(detail);
+                            bool const ready = std::exchange(owner->m_readyAfterDownload, false);
+                            auto const& room = Service::get().group();
+                            auto const* mine = room ? room->member(owner->self()) : nullptr;
+                            if (ready && owner->m_cached && mapAudioSkipped(levelID) && mine && !mine->ready)
+                                owner->onReady(nullptr);
                             owner->requestRender();
                         });
     }
@@ -1371,6 +1376,7 @@ class GroupRoomLayer : public SceneLayer {
         hideSpinningDraw(room, Service::get().serverNow());
         if (m_mapID != room.level.id) {
             ++m_downloadGeneration;
+            m_readyAfterDownload = false;
             m_mapID = room.level.id;
             m_cached = room.level.id > 0 && mapCached(room.level.id);
             m_downloading = false;
@@ -1543,7 +1549,7 @@ class GroupRoomLayer : public SceneLayer {
         }
         bool const roll = groupNeedsRoll(room);
         auto const control = readyControl(seated || groupDrawing(room), m_pending, owner, room.level.id > 0 || roll,
-                                          m_cached || roll, m_downloading, myReady);
+                                          m_cached || roll, m_downloading, myReady, mapAudioSkipped(room.level.id));
         float barLeft = sideX + 6.f, barRight = sideX + sideWidth - 6.f;
         {
             auto* ldm = CCMenuItemToggler::createWithStandardSprites(this, menu_selector(GroupRoomLayer::onLdm), .4f);
@@ -1782,7 +1788,7 @@ class GroupRoomLayer : public SceneLayer {
         bool const roll = groupNeedsRoll(*room);
         auto const control =
             readyControl(playingNow(*room) || groupDrawing(*room), m_pending, host(), room->level.id > 0 || roll,
-                         m_cached || roll, m_downloading, mine && mine->ready);
+                         m_cached || roll, m_downloading, mine && mine->ready, mapAudioSkipped(room->level.id));
         if (control.action == ReadyAction::None) return;
         if (control.action == ReadyAction::ChooseMap) {
             if (room->mapPool) {
@@ -1794,6 +1800,11 @@ class GroupRoomLayer : public SceneLayer {
         }
         if (control.action == ReadyAction::Download) {
             beginDownload();
+            requestRender();
+            return;
+        }
+        if (control.action == ReadyAction::SkipMusic) {
+            m_readyAfterDownload = skipMapAudio(room->level.id);
             requestRender();
             return;
         }
