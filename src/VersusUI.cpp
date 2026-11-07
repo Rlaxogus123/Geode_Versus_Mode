@@ -412,9 +412,10 @@ public:
     }
 };
 
-// BMFont에 없는 한글은 기존 언어 설정에 맞춰 시스템 글꼴로 표시한다.
+// 패치노트 창에서 Korean을 고른 사람에게만 한글로(BMFont에 없는 한글은 시스템 글꼴). 다른 버튼이 모두 영어라
+// 고른 적이 없으면 영어 그대로 둔다.
 void localizeSkipMusic(ButtonSprite* sprite, std::string const& caption) {
-    if (caption != "Skip Music" || !Mod::get()->getSavedValue<bool>("patch-notes-korean", true)) return;
+    if (caption != "Skip Music" || !Mod::get()->getSavedValue<bool>("patch-notes-korean", false)) return;
     sprite->m_label->setVisible(false);
     auto* text = createSystemText("\xEC\x9D\x8C\xEC\x95\x85 \xEA\xB1\xB4\xEB\x84\x88\xEB\x9B\xB0\xEA\xB8\xB0", 20.f,
                                   0.f, kCCTextAlignmentCenter, TextWeight::Bold);
