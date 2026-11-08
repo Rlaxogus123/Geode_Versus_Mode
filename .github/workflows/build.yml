@@ -62,10 +62,12 @@ jobs:
         shell: bash
         run: |
           # 재현이 안 될 때 어떤 도구가 달랐는지 보려고 남긴다.
+          # 첫 줄만 보되 head는 쓰지 않는다: head가 먼저 닫히면 아직 쓰고 있던 쪽이 SIGPIPE를 받는데,
+          # Xcode 26의 xcodebuild는 그걸 예외로 던지고 abort(134)해서 pipefail로 단계가 실패한다(v1.0.6 첫 빌드).
           echo "runner: $ImageOS $ImageVersion"
-          clang --version | head -1 || true
-          cmake --version | head -1 || true
-          if [ "$RUNNER_OS" = "macOS" ]; then xcodebuild -version | head -1; fi
+          clang --version | sed -n 1p || true
+          cmake --version | sed -n 1p || true
+          if [ "$RUNNER_OS" = "macOS" ]; then xcodebuild -version | sed -n 1p || true; fi
 
       - name: Build
         uses: geode-sdk/build-geode-mod@61a56c697aea9655e3f31c6c1b83870431f30434
