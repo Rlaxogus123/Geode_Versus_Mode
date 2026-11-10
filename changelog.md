@@ -3,7 +3,9 @@
 ## v1.0.7 (in progress)
 
 ### Interface
-- Achievements: the window is split into Season 1, Season 2 and Versus tabs, each with its own unlocked / total count (Season 1: Ranked matches and wins, Rating and the Season 1 ranks - the series only Season 1 Ranked counted; Season 2: the cup series; Versus: everything else, including Global Rank, which Season 2 ranks also reach, and Membership). The "Unlocked" checkbox shows only what you have. The window opens on the tab of your equipped title, then remembers the last tab.
+- Achievements: the window is split into Season 1, Season 2 and Versus tabs, each with its own unlocked / total count (Season 1: the Season 1 rating and rank titles, which only Season 1 could give; Season 2: the cup series; Versus: everything any season counts - Ranked Matches, Ranked Wins, Global Rank, all matches, Membership and the rest). The "Unlocked" checkbox shows only what you have. The window opens on the tab of your equipped title, then remembers the last tab.
+- Ranked Matches and Ranked Wins achievements count the Ranked games of every season: Season 2 matches (both cups, placements included) now add to the Season 1 ones. Games already played count right away.
+- G.O.A.T: the S2 G.O.A.T title (reach G.O.A.T in the Demon Cup) burns with the G.O.A.T fire wherever it is worn, and has its own fiery row at the top of the Season 2 tab. Once earned it stays, even after leaving G.O.A.T.
 - Aura and Finisher share one cleaner layout: a wide preview stage, the name with an IN USE / MEMBERSHIP ONLY tag under it, the All / Standard / Membership tabs, then the cards with GD arrows that turn one page (4 cards) at a time and dim at either end. The card in use has a check mark, membership-only cards a lock, and the window opens on the page of the one you use.
 - The Achievements, Aura, Finisher and Nickname Style windows scale down as a whole on screens narrower or shorter than the window (tablets, foldables, small windows), so nothing - the close button included - is cut off.
 
@@ -14,6 +16,7 @@
 - Updates: the game now asks the Versus server which version it accepts and downloads that release from GitHub (before, it took GitHub's latest release). A release published on GitHub ahead of the server no longer makes the game update into a version the server rejects (the "Versus is out of date" loop); the update starts when the server is switched to it. If the server cannot be reached, the game continues in and the Versus screen reports the maintenance or connection state.
 - Mini games: the Minesweeper header no longer says "searching in background", and the picker only mentions matchmaking while a search is actually running (the games can be opened without one).
 - Player icons now follow the GD Glow setting everywhere in Versus (rooms, match panels, HUD, result screens, LIVE, leaderboards, the Season 2 plaza, spectating): a player with Glow on is drawn with their glow color, a player with it off without one. Before, battle icons always had a white outline and the others never had any. Players on 1.0.6 or older are drawn without a glow until they update.
+- Ranked (Season 2, Windows): with Eclipse's Lock Cursor on, the mouse stayed stuck in the middle of the window on the cup screen (Eclipse holds it there while a level runs, and the lounge is one), even with GD's own Lock Cursor off. The cup screen now says so and how to turn it off (Eclipse menu, Global > Lock Cursor); its OK button sits where the mouse is held, so one click (or Esc) closes it.
 
 ## v1.0.6 (2026-11-08)
 

@@ -377,6 +377,18 @@ CCNode* adminBadge(CCNode* parent, TitleStyle const& style, CCPoint position, fl
     return plateBadge(parent, style, position, scale, maxWidth, animated, maker::kAdminArt);
 }
 
+// G.O.A.T 칭호(시즌 2 데몬 컵 최상위, 한 번 달성하면 G.O.A.T에서 내려와도 남는다) 배지 뒤에서 타오르는 불꽃.
+// G.O.A.T 티어 이름 뒤의 것과 같은 셰이더(goat::band)로, 판 아래쪽에서 피어올라 위로 판 높이만큼 넘실댄다.
+// 셰이더를 못 쓰는 기기면 불꽃 없이 간다.
+void goatTitleFire(CCNode* root, float w, float h) {
+    float const tall = h * 1.9f;
+    if (auto* fire = goat::band({w + 10.f, tall}, ccc3(255, 150, 40), .75f)) {
+        fire->setPosition({w / 2.f, tall / 2.f - 2.f});
+        fire->setID("goat-title-fire"_spr);
+        root->addChild(fire, -3);
+    }
+}
+
 // 칭호 ID에 맞는 배지를 만들어 parent에 붙이고 반환한다.
 // 시즌 1 최종 칭호는 티어 칭호의 모양에 "S1 R<레이팅>" 글자를 쓴다.
 // 개발자/운영자 효과(Sky, Staff)는 전용 판으로 넘기고, 나머지는 아래에서 직접 구성한다.
@@ -410,6 +422,7 @@ CCNode* titleBadge(CCNode* parent, int title, CCPoint position, float scale = 1.
     root->addChild(glow, -2);
     auto* box = CCLayerColor::create(ccc4(base.r * .45f, base.g * .45f, base.b * .45f, 235), w, h);
     root->addChild(box, -1);
+    if (title == kSeason2GoatTitle && animated) goatTitleFire(root, w, h);
     auto const edge = mix(base, ccWHITE, .35f);
     auto* border = CCNodeRGBA::create();
     border->setCascadeColorEnabled(true);

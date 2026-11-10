@@ -25,4 +25,10 @@ void show(bool unlock);
 void relock(bool unlock);
 // 플레이 중에는 커서를 숨기고 필요하면 잠근다. 메뉴 커서가 필요한 상태면 건드리지 않는다.
 void hideForPlay();
+// Eclipse의 Lock Cursor(Global 탭)가 켜져 있는지(Windows). 켜져 있으면 레벨이 도는 동안 Eclipse가 매 프레임
+// 커서를 창 가운데로 옮겨서, 레벨 위에 있는 Versus 화면(Season 2 라운지)을 마우스로 쓸 수 없다.
+bool eclipseLocksCursor();
+// 켜져 있으면 끄는 방법을 알리는 창을 띄운다. again이 false면 이번 실행에서 이미 알렸을 때는 띄우지 않는다
+// (꺼진 것을 보면 다시 알릴 수 있게 된다). 확인 버튼은 커서가 붙잡힌 화면 가운데에 둔다.
+void warnEclipseLockCursor(bool again);
 }

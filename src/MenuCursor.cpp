@@ -9,6 +9,7 @@
 #ifdef GEODE_IS_WINDOWS
 #include <Geode/modify/CCEGLView.hpp>
 #include <Windows.h>
+#include <eclipse.eclipse-menu/include/config.hpp>
 #endif
 
 using namespace geode::prelude;
@@ -105,6 +106,46 @@ void versus::cursor::hideForPlay() {
     PlatformToolbox::hideCursor();
     if (gameLocksCursor()) PlatformToolbox::toggleLockCursor(true);
 #endif
+}
+
+bool versus::cursor::eclipseLocksCursor() {
+#ifdef GEODE_IS_WINDOWS
+    return Loader::get()->isModLoaded("eclipse.eclipse-menu") &&
+           eclipse::config::getInternal<bool>("global.lockcursor", false);
+#else
+    return false;
+#endif
+}
+
+void versus::cursor::warnEclipseLockCursor(bool again) {
+    static bool s_warned = false;
+    if (!eclipseLocksCursor()) {
+        s_warned = false;
+        return;
+    }
+    if (s_warned && !again) return;
+    s_warned = true;
+    auto* alert = FLAlertLayer::create(
+        nullptr, "Lock Cursor",
+        "<cy>Eclipse</c>'s <cy>Lock Cursor</c> keeps the mouse in the middle of the window on this screen.\n"
+        "Turn it off: Eclipse (<cg>Tab</c>) > <cg>Global</c> > <cg>Lock Cursor</c>.",
+        "OK", nullptr, 380.f);
+    if (!alert) return;
+    // 창을 올려 OK 버튼이 화면 가운데(Eclipse가 커서를 붙잡아 두는 자리)에 오게 한다: 클릭 한 번이면 닫힌다
+    // (Esc도 된다). 창 위쪽이 화면 밖으로 나가지 않을 만큼만 올린다.
+    auto* item = alert->m_button1 ? alert->m_button1->getParent() : nullptr;
+    auto* panel = alert->m_mainLayer ? alert->m_mainLayer->getChildByType<CCScale9Sprite>(0) : nullptr;
+    if (item && item->getParent() && panel) {
+        auto const win = CCDirector::sharedDirector()->getWinSize();
+        auto const button = item->getParent()->convertToWorldSpace(item->getPosition());
+        auto const box = panel->boundingBox();
+        float const top = alert->m_mainLayer->convertToWorldSpace({box.getMidX(), box.getMaxY()}).y;
+        float const lift = std::max(0.f, std::min(win.height / 2.f - button.y, win.height - 6.f - top));
+        alert->m_mainLayer->setPositionY(alert->m_mainLayer->getPositionY() + lift);
+        if (alert->m_buttonMenu && alert->m_buttonMenu->getParent() != alert->m_mainLayer)
+            alert->m_buttonMenu->setPositionY(alert->m_buttonMenu->getPositionY() + lift);
+    }
+    alert->show();
 }
 
 // owner에 붙인 가드 노드를 제거한다.

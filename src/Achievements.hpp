@@ -176,7 +176,7 @@ inline constexpr std::array<TitleStyle, 99> kTitles{{
      TitleIcon::Flame, 0xC0391B},
     {"S2 Extreme Demon", "s2-extreme-demon", "Reach Extreme Demon in the Demon Cup (Season 2)", TitleEffect::Aurora,
      TitleIcon::Crown, 0x8E1020},
-    {"S2 G.O.A.T", "s2-grandpa-demon", "Reach G.O.A.T in the Demon Cup (Season 2)", TitleEffect::Rainbow,
+    {"S2 G.O.A.T", "s2-grandpa-demon", "Reach G.O.A.T in the Demon Cup (Season 2)", TitleEffect::Flame,
      TitleIcon::Crown, 0xE0B030},
     {"Veto", "s2-veto", "Ban 10 maps in Season 2", TitleEffect::Pulse, TitleIcon::Target, 0x5A7FB0},
     {"Gatekeeper", "s2-gatekeeper", "Ban 50 maps in Season 2", TitleEffect::Royal, TitleIcon::Shield, 0x3A5FA0},
@@ -293,16 +293,15 @@ inline constexpr int kAchievementGroupCount = 3;
 inline constexpr std::array<std::string_view, kAchievementGroupCount> kAchievementGroupNames{"Season 1", "Season 2",
                                                                                              "Versus"};
 // 칭호 계열이 들어가는 탭.
-// Season 1: 시즌 1 랭크 경기로만 오르던 계열(랭크 경기 수·랭크 승리·레이팅·시즌 1 티어). 시즌 1이 끝나 더 오르지 않는다.
+// Season 1: 시즌 1에만 있는 것 - 시즌 1 레이팅(1600~2200)과 시즌 1 티어. 시즌 1이 끝나 더 오르지 않는다.
 // Season 2: Season 2 계열 전부.
-// Versus: 나머지 - 모든 경기에서 오르는 계열, 멤버십, Special, 그리고 시즌 2 순위로도 얻는 Global Rank.
+// Versus: 나머지 - 시즌과 상관없이 오르는 계열 전부. 랭크 경기 수·랭크 승리(1.0.7부터 시즌 1 + 시즌 2 랭크 경기를
+// 모두 센다), 시즌 2 순위로도 얻는 Global Rank, 모든 경기에서 오르는 계열, 멤버십, Special.
 constexpr AchievementGroup seriesGroup(int series) {
     if (series >= kFirstSeason2Series) return AchievementGroup::Season2;
     if (series < 0) return AchievementGroup::Versus;
     auto const name = kSeries[series].name;
-    return name == "Ranked Matches" || name == "Ranked Wins" || name == "Rating" || name == "Season 1 Rank"
-               ? AchievementGroup::Season1
-               : AchievementGroup::Versus;
+    return name == "Rating" || name == "Season 1 Rank" ? AchievementGroup::Season1 : AchievementGroup::Versus;
 }
 // 칭호가 속한 계열의 탭. 계열에 없는 칭호(기본·개발자·운영자)는 Versus.
 constexpr AchievementGroup titleSeriesGroup(int title) {
@@ -332,8 +331,10 @@ static_assert(everyAchievementInOneSeries());
 static_assert(groupAchievementCount(AchievementGroup::Season1) + groupAchievementCount(AchievementGroup::Versus) ==
               kAchievementCount);
 static_assert(groupAchievementCount(AchievementGroup::Season2) == kSeason2AchievementCount);
-static_assert(groupAchievementCount(AchievementGroup::Season1) == 23 &&
-              titleSeriesGroup(74) == AchievementGroup::Season1 && titleSeriesGroup(45) == AchievementGroup::Versus &&
+static_assert(groupAchievementCount(AchievementGroup::Season1) == 14 &&
+              titleSeriesGroup(74) == AchievementGroup::Season1 && titleSeriesGroup(44) == AchievementGroup::Season1 &&
+              titleSeriesGroup(43) == AchievementGroup::Versus && titleSeriesGroup(40) == AchievementGroup::Versus &&
+              titleSeriesGroup(45) == AchievementGroup::Versus &&
               titleSeriesGroup(kDeveloperTitle) == AchievementGroup::Versus);
 
 // 업적 진행도: 현재 값, 목표 값, 달성 시각(미달성이면 0).

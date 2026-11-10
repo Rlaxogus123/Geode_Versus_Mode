@@ -942,8 +942,10 @@ class TitlesPopup final : public CustomizePopup {
     }
     // 칭호 행 하나(또는 계열 헤더)를 만든다: 배지, 조건 문구, 상태 문구, 진행 막대, 달성 비율.
     // 획득하지 못한 일반 행은 반투명으로 보인다.
+    // goat: Season 2 탭 맨 위의 G.O.A.T 전용 칸 - 얻었으면 불씨 빛 판 위로 G.O.A.T 불꽃 셰이더가 타오르고,
+    // 위쪽에 "kept for good"(G.O.A.T에서 내려와도 남는다) 머리말.
     CCNode* titleRow(int title, CCSize size, float indent, std::string const& caption, bool header, bool open,
-                     int badge = -1, std::string const& detail = "") {
+                     int badge = -1, std::string const& detail = "", bool goatSpecial = false) {
         bool const owned = m_state->ownsTitle(title), equipped = m_draft.title == title;
         auto* cell = CCNode::create();
         cell->setContentSize(size);
@@ -954,16 +956,28 @@ class TitlesPopup final : public CustomizePopup {
             auto* bg = NineSlice::create("square02b_001.png");
             bg->setContentSize(size);
             bg->setPosition(size / 2.f);
-            bg->setColor(equipped ? ccc3(32, 112, 98) : owned ? ccc3(24, 52, 92) : ccc3(16, 24, 40));
-            bg->setOpacity(225);
+            bg->setColor(goatSpecial && owned ? ccc3(74, 28, 10)
+                         : equipped           ? ccc3(32, 112, 98)
+                         : owned              ? ccc3(24, 52, 92)
+                                              : ccc3(16, 24, 40));
+            bg->setOpacity(goatSpecial && owned ? 245 : 225);
             cell->addChild(bg, -1);
+            if (goatSpecial && owned)
+                if (auto* fire = goat::band({size.width - 8.f, size.height * 1.05f}, ccc3(255, 140, 30), .55f)) {
+                    fire->setPosition({size.width / 2.f, size.height * 1.05f / 2.f + 1.f});
+                    fire->setID("goat-row-fire"_spr);
+                    cell->addChild(fire, -1);
+                }
         }
-        titleBadge(cell, badge >= 0 ? badge : title, {indent + 58.f, mid - (header ? 2.f : 0.f)}, header ? 1.12f : 1.f,
-                   110.f, header || owned);
+        titleBadge(cell, badge >= 0 ? badge : title, {indent + 58.f, mid - (header || goatSpecial ? 2.f : 0.f)},
+                   header || goatSpecial ? 1.12f : 1.f, 110.f, header || owned);
         float const textX = indent + 122.f;
         auto [state, fraction] = titleState(title);
         if (header)
             label(cell, caption, {textX, size.height - 8.f}, .3f, 190.f, ccc3(255, 221, 120), true, "goldFont.fnt");
+        if (goatSpecial)
+            label(cell, "G.O.A.T  -  kept for good", {textX, size.height - 8.f}, .3f, 190.f, ccc3(255, 196, 90), true,
+                  "goldFont.fnt");
         std::string const requirement = isS1FinalTitle(title)
                                             ? std::string("Your last rating in Season 1")
                                             : std::string(kTitles[std::clamp(title, 0, kTitleCount - 1)].requirement);
@@ -1015,7 +1029,7 @@ class TitlesPopup final : public CustomizePopup {
         bool const keepScroll = content->getChildrenCount() > 0;
         float const scrollFromTop = content->getContentSize().height + content->getPositionY();
         content->removeAllChildrenWithCleanup(true);
-        constexpr float headerH = 40.f, rowH = 32.f, gap = 3.f;
+        constexpr float headerH = 40.f, rowH = 32.f, goatH = 42.f, gap = 3.f;
         struct Item {
             int tag, title;
             float height;
@@ -1031,6 +1045,10 @@ class TitlesPopup final : public CustomizePopup {
         }
         if (m_group == AchievementGroup::Season1 && m_state->s1Final)
             items.push_back({m_state->s1Final, m_state->s1Final, rowH, false, -1});
+        // Season 2: 맨 위에 G.O.A.T 전용 칸(불꽃 장식). 데몬 컵 계열을 펼쳐도 그 칭호 행은 여기 대신 빠진다.
+        bool const goatRow = m_group == AchievementGroup::Season2 && m_state->season2;
+        if (goatRow && (!m_ownedOnly || m_state->ownsTitle(kSeason2GoatTitle)))
+            items.push_back({kSeason2GoatTitle, kSeason2GoatTitle, goatH, false, -1});
         int const seriesCount = static_cast<int>(kSeries.size());
         std::vector<int> order;
         std::vector<std::tuple<int, float, float>> keys(kSeries.size());
@@ -1054,7 +1072,8 @@ class TitlesPopup final : public CustomizePopup {
             for (bool const owned : {true, false}) {
                 if (!owned && m_ownedOnly) break;
                 for (int i = 0; i < series.count; ++i)
-                    if (m_state->ownsTitle(series.titles[i]) == owned)
+                    if (m_state->ownsTitle(series.titles[i]) == owned &&
+                        !(goatRow && series.titles[i] == kSeason2GoatTitle))
                         items.push_back({series.titles[i], series.titles[i], rowH, false, s});
             }
         }
@@ -1083,7 +1102,8 @@ class TitlesPopup final : public CustomizePopup {
                                 m_open.contains(item.series), series.titles[series.count - 1], detail);
             } else {
                 float const indent = item.series >= 0 ? 18.f : 0.f;
-                cell = titleRow(item.title, {388.f - indent, item.height}, 0.f, "", false, false);
+                bool const special = item.title == kSeason2GoatTitle && item.series < 0;
+                cell = titleRow(item.title, {388.f - indent, item.height}, 0.f, "", false, false, -1, "", special);
                 if (item.series >= 0) {
                     auto* branch = CCLayerColor::create(ccc4(255, 221, 120, 120), 2.f, item.height + gap);
                     branch->setPosition({-10.f, 0.f});

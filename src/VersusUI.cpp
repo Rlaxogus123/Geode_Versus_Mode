@@ -7576,6 +7576,8 @@ class RankedLayer final : public SceneLayer {
     std::string m_notice;
     std::string m_shownIntegrityResult;
     bool m_integritySending = false;
+    // Eclipse Lock Cursor 안내: 이 화면에서 확인했는지, 이번 실행에 이미 알렸어도 다시 알릴지(메뉴에서 들어옴).
+    bool m_lockCursorChecked = false, m_lockCursorAgain = true;
 
     // Ranked 중 외부 치트가 감지되는지 검사한다. 탐색 중이면 탐색을 취소시키고 안내하며,
     // 매치가 진행 중이면 서버에 실격(disqualify) 보고를 보낸다. 큐/매치가 없으면 아무것도
@@ -8164,6 +8166,17 @@ class RankedLayer final : public SceneLayer {
         Mod::get()->setSavedValue<int64_t>(dodgeSeenKey(dodge), dodge.penaltyAt);
         (void)Mod::get()->saveData();
         if (auto* popup = DodgeInfoPopup::create(dodge, true)) popup->show();
+    }
+    // Eclipse의 Lock Cursor가 켜져 있으면 라운지(돌아가는 GD 레벨)가 있는 동안 커서가 창 가운데에 묶여 이
+    // 화면을 클릭할 수 없다. 라운지가 열리고 이 화면이 실행 중일 때 한 번 끄는 방법을 알린다: 메뉴에서
+    // 들어올 때마다, 전투에서 돌아올 때는 이번 실행에서 아직 알리지 않았을 때만.
+    void warnLockCursorWhenReady() {
+        if (m_lockCursorChecked || !m_s2Lounge || !lounge::active() || m_transitioning || !isRunning()) return;
+        CCNode* scene = this;
+        while (scene->getParent()) scene = scene->getParent();
+        if (scene != CCDirector::sharedDirector()->getRunningScene()) return;
+        m_lockCursorChecked = true;
+        cursor::warnEclipseLockCursor(m_lockCursorAgain);
     }
     // 하단 도구 버튼 크기/간격 상수와 별/오브 보상 토글 버튼.
     static constexpr float kToolSize = 28.f, kToolPitch = 34.f, kToolGap = 16.f;
@@ -10803,6 +10816,7 @@ public:
         m_pollTimer = ranked::STATE_POLL_NOW;
         if (m_s2Lounge) {
             lounge::attachNow(m_s2Lounge);
+            m_lockCursorAgain = !s2match::fromBattle();
             if (s2match::fromBattle())
                 if (auto* cover = Season2Return::create(m_s2Lounge, season2ReturnLook())) {
                     addChild(cover, -7);
@@ -10885,6 +10899,7 @@ public:
         }
         showNoticeWhenReady();
         showDodgePenaltyWhenReady();
+        warnLockCursorWhenReady();
         if (!m_lastResult || m_resultTime >= ranked::RATING_ANIMATION_SECONDS) offerUpdate();
         m_ackRetry = std::max(0.f, m_ackRetry - dt);
         // Season 2 무승부 재대결 대기: kS2DrawHold 이후 보류된 상태를 반영하고, kS2DrawGiveUp
