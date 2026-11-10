@@ -287,6 +287,55 @@ constexpr int titleTier(int title) {
     return isMembershipTitle(title) ? 4 : 1;
 }
 
+// 업적 창의 분류 탭. 순서가 화면의 왼쪽→오른쪽 순서다.
+enum class AchievementGroup : uint8_t { Season1, Season2, Versus };
+inline constexpr int kAchievementGroupCount = 3;
+inline constexpr std::array<std::string_view, kAchievementGroupCount> kAchievementGroupNames{"Season 1", "Season 2",
+                                                                                             "Versus"};
+// 칭호 계열이 들어가는 탭.
+// Season 1: 시즌 1 랭크 경기로만 오르던 계열(랭크 경기 수·랭크 승리·레이팅·시즌 1 티어). 시즌 1이 끝나 더 오르지 않는다.
+// Season 2: Season 2 계열 전부.
+// Versus: 나머지 - 모든 경기에서 오르는 계열, 멤버십, Special, 그리고 시즌 2 순위로도 얻는 Global Rank.
+constexpr AchievementGroup seriesGroup(int series) {
+    if (series >= kFirstSeason2Series) return AchievementGroup::Season2;
+    if (series < 0) return AchievementGroup::Versus;
+    auto const name = kSeries[series].name;
+    return name == "Ranked Matches" || name == "Ranked Wins" || name == "Rating" || name == "Season 1 Rank"
+               ? AchievementGroup::Season1
+               : AchievementGroup::Versus;
+}
+// 칭호가 속한 계열의 탭. 계열에 없는 칭호(기본·개발자·운영자)는 Versus.
+constexpr AchievementGroup titleSeriesGroup(int title) {
+    for (int s = 0; s < static_cast<int>(kSeries.size()); ++s)
+        for (int i = 0; i < kSeries[s].count; ++i)
+            if (kSeries[s].titles[i] == title) return seriesGroup(s);
+    return AchievementGroup::Versus;
+}
+// 탭에 들어가는 업적 수(멤버십 칭호는 업적이 아니라 빼고 센다).
+constexpr int groupAchievementCount(AchievementGroup group) {
+    int total = 0;
+    for (int s = 0; s < static_cast<int>(kSeries.size()); ++s)
+        if (seriesGroup(s) == group)
+            for (int i = 0; i < kSeries[s].count; ++i) total += achievementOfTitle(kSeries[s].titles[i]) >= 0;
+    return total;
+}
+// 모든 업적의 칭호가 계열 표에 꼭 한 번씩 있는지(탭별 개수의 합이 전체와 맞으려면 필요하다).
+constexpr bool everyAchievementInOneSeries() {
+    std::array<int, kTitles.size()> seen{};
+    for (auto const& series : kSeries)
+        for (int i = 0; i < series.count; ++i) ++seen[series.titles[i]];
+    for (int index = 0; index < kAllAchievementCount; ++index)
+        if (seen[titleOfAchievement(index)] != 1) return false;
+    return true;
+}
+static_assert(everyAchievementInOneSeries());
+static_assert(groupAchievementCount(AchievementGroup::Season1) + groupAchievementCount(AchievementGroup::Versus) ==
+              kAchievementCount);
+static_assert(groupAchievementCount(AchievementGroup::Season2) == kSeason2AchievementCount);
+static_assert(groupAchievementCount(AchievementGroup::Season1) == 23 &&
+              titleSeriesGroup(74) == AchievementGroup::Season1 && titleSeriesGroup(45) == AchievementGroup::Versus &&
+              titleSeriesGroup(kDeveloperTitle) == AchievementGroup::Versus);
+
 // 업적 진행도: 현재 값, 목표 값, 달성 시각(미달성이면 0).
 struct AchievementProgress {
     int progress = 0, goal = 1;

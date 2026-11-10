@@ -2,6 +2,11 @@
 
 ## v1.0.7 (in progress)
 
+### Interface
+- Achievements: the window is split into Season 1, Season 2 and Versus tabs, each with its own unlocked / total count (Season 1: Ranked matches and wins, Rating and the Season 1 ranks - the series only Season 1 Ranked counted; Season 2: the cup series; Versus: everything else, including Global Rank, which Season 2 ranks also reach, and Membership). The "Unlocked" checkbox shows only what you have. The window opens on the tab of your equipped title, then remembers the last tab.
+- Aura and Finisher share one cleaner layout: a wide preview stage, the name with an IN USE / MEMBERSHIP ONLY tag under it, the All / Standard / Membership tabs, then the cards with GD arrows that turn one page (4 cards) at a time and dim at either end. The card in use has a check mark, membership-only cards a lock, and the window opens on the page of the one you use.
+- The Achievements, Aura, Finisher and Nickname Style windows scale down as a whole on screens narrower or shorter than the window (tablets, foldables, small windows), so nothing - the close button included - is cut off.
+
 ### Fixes
 - Ranked (Season 2): going back from a draw card now declines the rematch. Before, the back button dropped you into the rematch that was being set up and asked you to leave it as a dodge, or - if you left before your opponent had seen the draw - the opponent waited 15 seconds for a rematch that never came and you were shown an "opponent left" card on your next visit. Now you leave at once with no penalty, your opponent is told there is no rematch, and nobody gets a card for a match they never played.
 - The game no longer crashes when entering a Ranked lobby with Comments in Pause Menu (mishpro.comments_in_pause_menu) enabled. That mod's hooks are paused while a Versus screen hosts a level (the lounge, replays, free play), as QuickProfile's already were.
