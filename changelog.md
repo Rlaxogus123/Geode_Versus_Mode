@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.7 (in progress)
+
+### Fixes
+- Ranked (Season 2): going back from a draw card now declines the rematch. Before, the back button dropped you into the rematch that was being set up and asked you to leave it as a dodge, or - if you left before your opponent had seen the draw - the opponent waited 15 seconds for a rematch that never came and you were shown an "opponent left" card on your next visit. Now you leave at once with no penalty, your opponent is told there is no rematch, and nobody gets a card for a match they never played.
+- The game no longer crashes when entering a Ranked lobby with Comments in Pause Menu (mishpro.comments_in_pause_menu) enabled. That mod's hooks are paused while a Versus screen hosts a level (the lounge, replays, free play), as QuickProfile's already were.
+- Anti-cheat notice: "You were disqualified for using ..." (it said "You was"), the detected cheat named in the sentence.
+- Updates: the game now asks the Versus server which version it accepts and downloads that release from GitHub (before, it took GitHub's latest release). A release published on GitHub ahead of the server no longer makes the game update into a version the server rejects (the "Versus is out of date" loop); the update starts when the server is switched to it. If the server cannot be reached, the game continues in and the Versus screen reports the maintenance or connection state.
+- Mini games: the Minesweeper header no longer says "searching in background", and the picker only mentions matchmaking while a search is actually running (the games can be opened without one).
+- Player icons now follow the GD Glow setting everywhere in Versus (rooms, match panels, HUD, result screens, LIVE, leaderboards, the Season 2 plaza, spectating): a player with Glow on is drawn with their glow color, a player with it off without one. Before, battle icons always had a white outline and the others never had any. Players on 1.0.6 or older are drawn without a glow until they update.
+
 ## v1.0.6 (2026-11-08)
 
 ### Season 2

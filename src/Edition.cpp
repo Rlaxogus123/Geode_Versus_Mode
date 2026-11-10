@@ -37,6 +37,16 @@ void addAuraImage(CCNode* icon, AuraSpriteSpec const& spec) {
     }
 }
 }
+// 1.0.7: 두 색과 Glow를 한 번에 입힌다. glow는 Glow가 켜진 플레이어의 글로우 색(RGB), 꺼져 있으면 -1.
+void applyIconLook(SimplePlayer* icon, int color1, int color2, int glow) {
+    if (!icon) return;
+    auto const rgb = [](int value) { return ccc3((value >> 16) & 255, (value >> 8) & 255, value & 255); };
+    icon->setColors(rgb(color1), rgb(color2));
+    if (glow >= 0)
+        icon->setGlowOutline(rgb(glow));
+    else
+        icon->disableGlowOutline();
+}
 // 아이콘에 오라를 붙인다. 사용 권한이 없거나 None(8)이면 아무것도 하지 않는다.
 // 이미지가 있는 오라는 이미지를 먼저 붙이고, 이어서 공통으로 파티클을 붙인다.
 void addMembershipAura(CCNode* icon, bool membership, Cosmetics const& cosmetics) {

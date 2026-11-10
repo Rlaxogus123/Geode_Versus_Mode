@@ -19,18 +19,12 @@
 using namespace geode::prelude;
 namespace versus {
 namespace {
-// 0xRRGGBB 값을 ccColor3B로 바꾼다.
-ccColor3B rgb(int value) {
-    return ccc3((value >> 16) & 255, (value >> 8) & 255, value & 255);
-}
-
 // 프로필의 아이콘/색/오라를 입힌 결과 화면용 아이콘.
 SimplePlayer* resultIcon(PlayerProfile const& profile, float scale) {
     auto* manager = GameManager::sharedState();
     int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
     auto* icon = SimplePlayer::create(std::clamp(profile.icon, 1, count));
-    icon->setColors(rgb(profile.color1), rgb(profile.color2));
-    icon->setGlowOutline(ccWHITE);
+    applyIconLook(icon, profile.color1, profile.color2, profile.glow);
     addMembershipAura(icon, profile.membership, profile.cosmetics);
     icon->setScale(scale);
     return icon;

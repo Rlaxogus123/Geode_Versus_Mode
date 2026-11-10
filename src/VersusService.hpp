@@ -26,6 +26,9 @@ struct PlayerProfile {
     int icon = 1;
     int color1 = 0x007BFF;
     int color2 = 0xFFFFFF;
+    // 1.0.7: GD의 Glow 설정 - 켜져 있으면 그 외곽선 색(RGB), 꺼져 있으면 -1. 서버 프로필의 선택 키 "glow"
+    // (없으면 끔; 1.0.6 이하 게임은 보내지 않으므로 그 플레이어는 Glow 없이 그려진다).
+    int glow = -1;
     double winRate = 0;
     int recentGames = 0;
     bool membership = false;
@@ -378,6 +381,8 @@ struct RankedResult {
     std::string matchId, winnerUid, result, oldTier, newTier;
     std::string oldTierName, newTierName;
     std::string disqualifiedUid, integrityCode, integrityFeatures;
+    // 1.0.7: 무승부 카드에서 뒤로 가기로 재대결을 사양한 쪽의 uid(서버 rematchDeclined). 비어 있으면 없음.
+    std::string rematchDeclined;
     bool draw = false;
     double oldRating = 1500., newRating = 1500.;
     int oldGlobalRank = 0, newGlobalRank = 0;
@@ -487,6 +492,8 @@ struct RankedState {
     int searchScale = 100;
     std::string searchCancelOutcome;
     int searchCancelsLeft = -1;
+    // 1.0.7: 상대가 무승부 카드에서 뒤로 가기로 재대결을 사양함(서버 rematchGone: 그 무승부 매치 id와 안내 문구).
+    std::string rematchGoneMatch, rematchGoneText;
     bool allowDuel = true;
     std::optional<RankedDuelRequest> duelIncoming, duelOutgoing;
     std::vector<RankedProfile> searchers;
@@ -951,7 +958,9 @@ public:
     void searchRankedPlayers(std::string query, std::function<void(std::vector<RankedProfile>, std::string)> callback);
     // Ranked 대기열, 듀얼, 이모트.
     void joinRankedQueue(RankedStateCallback callback);
-    void cancelRanked(RankedStateCallback callback, bool searchCancel = false, std::string seen = {});
+    // declineRematch: 무승부 카드에서 뒤로 가기(1.0.7) - 재대결을 사양한다(닷지 아님).
+    void cancelRanked(RankedStateCallback callback, bool searchCancel = false, std::string seen = {},
+                      bool declineRematch = false);
     void challengeRanked(std::string targetUid, bool anonymous, RankedStateCallback callback);
     void setRankedDuels(bool enabled, RankedStateCallback callback);
     void sendRankedLobbyEmote(std::string kind, RankedStateCallback callback);

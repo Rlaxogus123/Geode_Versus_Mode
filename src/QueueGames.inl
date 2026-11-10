@@ -38,12 +38,14 @@ public:
 // 미니게임 선택 창(Runner / Minesweeper). 선택 결과를 tag(0, 1)로 콜백에 넘긴다.
 class QueueGamePicker final : public QueueGamePopup {
     std::function<void(int)> m_choose;
-    bool init(std::function<void(int)> choose) {
+    // searching: 매칭 중에 열렸는지. 미니게임은 매칭 없이도 열 수 있으므로(Game 버튼) 매칭 안내는 그때만 보인다.
+    bool init(std::function<void(int)> choose, bool searching) {
         if (!Popup::init(340.f, 185.f, "GJ_square02.png")) return false;
         m_choose = std::move(choose);
-        setTitle("While You Wait", "bigFont.fnt", .6f);
-        label(m_mainLayer, "Matchmaking stays active. Games close when matched.", {170.f, 132.f}, .4f, 308.f, kIce,
-              false, "chatFont.fnt");
+        setTitle(searching ? "While You Wait" : "Mini Games", "bigFont.fnt", .6f);
+        if (searching)
+            label(m_mainLayer, "Matchmaking stays active. Games close when matched.", {170.f, 132.f}, .4f, 308.f,
+                  kIce, false, "chatFont.fnt");
         auto* runner =
             button(m_buttonMenu, this, menu_selector(QueueGamePicker::onChoose), "Runner", {170.f, 93.f}, .62f);
         runner->setTag(0);
@@ -61,9 +63,9 @@ class QueueGamePicker final : public QueueGamePopup {
     }
 
 public:
-    static QueueGamePicker* create(std::function<void(int)> choose) {
+    static QueueGamePicker* create(std::function<void(int)> choose, bool searching) {
         auto* popup = new QueueGamePicker;
-        if (popup->init(std::move(choose))) {
+        if (popup->init(std::move(choose), searching)) {
             popup->autorelease();
             return popup;
         }
@@ -154,7 +156,7 @@ class QueueMinesweeper final : public QueueGamePopup {
     bool init() {
         if (!Popup::init(350.f, 310.f, "GJ_square02.png")) return false;
         setTitle("Minesweeper", "bigFont.fnt", .6f);
-        label(m_mainLayer, "FIRST CLICK SAFE  |  SEARCHING IN BACKGROUND", {175.f, 269.f}, .28f, 316.f, kIce);
+        label(m_mainLayer, "FIRST CLICK SAFE", {175.f, 269.f}, .28f, 316.f, kIce);  // (매칭 없이도 열리므로 매칭 문구 없음)
         m_board = mines::Board(std::random_device{}());
         loadedFrame("diffIcon_02_btn_001.png", "GJ_GameSheet03.plist");
         auto* music = MusicDownloadManager::sharedState();

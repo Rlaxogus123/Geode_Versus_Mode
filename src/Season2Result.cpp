@@ -57,8 +57,7 @@ SimplePlayer* icon(PlayerProfile const& profile, float scale) {
     auto* manager = GameManager::sharedState();
     int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
     auto* result = SimplePlayer::create(std::clamp(profile.icon, 1, count));
-    result->setColors(colour(profile.color1), colour(profile.color2));
-    result->setGlowOutline(ccWHITE);
+    applyIconLook(result, profile.color1, profile.color2, profile.glow);
     addMembershipAura(result, profile.membership, profile.cosmetics);
     result->setScale(scale);
     return result;

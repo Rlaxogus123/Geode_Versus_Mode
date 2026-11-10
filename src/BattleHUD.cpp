@@ -17,10 +17,6 @@
 using namespace geode::prelude;
 namespace versus {
 namespace {
-ccColor3B rgb(int value) {
-    return ccc3((value >> 16) & 255, (value >> 8) & 255, value & 255);
-}
-
 // 하트 아이콘. 스프라이트가 있으면 그것을 쓰고 없으면 하트 곡선 폴리곤으로 그린다.
 CCNodeRGBA* lifeHeart(float size) {
     auto* holder = CCNodeRGBA::create();
@@ -122,8 +118,7 @@ struct Card {
         auto* manager = GameManager::sharedState();
         int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
         auto* icon = SimplePlayer::create(std::clamp(player.icon, 1, count));
-        icon->setColors(rgb(player.color1), rgb(player.color2));
-        icon->setGlowOutline(ccWHITE);
+        applyIconLook(icon, player.color1, player.color2, player.glow);
         addMembershipAura(icon, player.membership, player.cosmetics);
         icon->setScale(.82f);
         icon->setFlipX(mirrored);
@@ -217,7 +212,7 @@ struct Card {
         auto* manager = GameManager::sharedState();
         int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
         auto* icon = SimplePlayer::create(std::clamp(profile.icon, 1, count));
-        icon->setColors(rgb(profile.color1), rgb(profile.color2));
+        applyIconLook(icon, profile.color1, profile.color2, profile.glow);
         icon->setCascadeOpacityEnabled(true);
         icon->setScale(.32f);
         icon->setFlipX(mirrored);

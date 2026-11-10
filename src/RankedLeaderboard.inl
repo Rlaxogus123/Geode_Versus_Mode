@@ -10,7 +10,7 @@ void rankedRow(CCNode* cell, RankedProfile const& row) {
           row.globalRank > 0 && row.globalRank <= 3 ? ccc3(255, 206, 105) : ccWHITE);
     auto* icon = SimplePlayer::create(
         std::clamp(row.player.icon, 1, std::max(1, GameManager::sharedState()->countForType(IconType::Cube))));
-    icon->setColors(unpackColor(row.player.color1), unpackColor(row.player.color2));
+    applyIconLook(icon, row.player.color1, row.player.color2, row.player.glow);
     icon->setScale(.65f);
     icon->setPosition({59.f, 16.f});
     cell->addChild(icon);
@@ -158,7 +158,7 @@ class RankedLeaderboardPopup final : public ::versus::DeferredPopup {
               row.globalRank > 0 && row.globalRank <= 3 ? ccc3(255, 206, 105) : ccWHITE);
         auto* icon = SimplePlayer::create(
             std::clamp(row.player.icon, 1, std::max(1, GameManager::sharedState()->countForType(IconType::Cube))));
-        icon->setColors(unpackColor(row.player.color1), unpackColor(row.player.color2));
+        applyIconLook(icon, row.player.color1, row.player.color2, row.player.glow);
         icon->setScale(.68f);
         icon->setPosition({128.f, 22.f});
         m_ownPanel->addChild(icon);

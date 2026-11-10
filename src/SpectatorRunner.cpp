@@ -201,8 +201,7 @@ bool SpectatorRunner::init(PlayerProfile const& profile) {
     m->avatar = SimplePlayer::create(
         std::clamp(profile.icon, 1, std::max(1, GameManager::sharedState()->countForType(IconType::Cube))));
     if (!m->avatar) return false;
-    m->avatar->setColors(ccc3((profile.color1 >> 16) & 255, (profile.color1 >> 8) & 255, profile.color1 & 255),
-                         ccc3((profile.color2 >> 16) & 255, (profile.color2 >> 8) & 255, profile.color2 & 255));
+    applyIconLook(m->avatar, profile.color1, profile.color2, profile.glow);
     addMembershipAura(m->avatar, profile.membership, profile.cosmetics);
     m->avatar->setScale(.9f);
     clip->addChild(m->avatar, 3);

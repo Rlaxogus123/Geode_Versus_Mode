@@ -301,6 +301,8 @@ void refreshLocalProfile() {
         profile.membership);
     profile.color1 = manager ? pack(manager->colorForIdx(manager->getPlayerColor())) : 0x007BFF;
     profile.color2 = manager ? pack(manager->colorForIdx(manager->getPlayerColor2())) : 0xFFFFFF;
+    // 1.0.7: Glow가 켜져 있으면 그 색(GD의 글로우 색 번호). 모든 플레이어 아이콘이 이 값을 따라 그려진다.
+    profile.glow = manager && manager->getPlayerGlow() ? pack(manager->colorForIdx(manager->getPlayerGlowColor())) : -1;
 }
 // Firebase API 키. 모드 설정값이 있으면 그것을, 없으면 내장 값을 쓴다.
 std::string configuredApiKey() {
@@ -316,6 +318,7 @@ Json profileJson(PlayerProfile const& profile) {
     value["icon"] = profile.icon;
     value["color1"] = profile.color1;
     value["color2"] = profile.color2;
+    if (profile.glow >= 0) value["glow"] = profile.glow;  // 1.0.7
     value["winRate"] = profile.winRate;
     value["recentGames"] = profile.recentGames;
     if (profile.membership) value["membership"] = true;
@@ -330,6 +333,7 @@ PlayerProfile parseProfile(Json const& value) {
     result.icon = static_cast<int>(intAt(value, "icon", 1));
     result.color1 = static_cast<int>(intAt(value, "color1", 0x007BFF));
     result.color2 = static_cast<int>(intAt(value, "color2", 0xFFFFFF));
+    result.glow = value["glow"].isNumber() ? static_cast<int>(std::clamp<int64_t>(intAt(value, "glow"), 0, 0xFFFFFF)) : -1;
     result.winRate = value["winRate"].asDouble().unwrapOr(0.);
     result.recentGames = static_cast<int>(intAt(value, "recentGames"));
     result.membership = boolAt(value, "membership");
@@ -862,6 +866,7 @@ RankedResult parseRankedResult(Json const& value) {
     result.disqualifiedUid = stringAt(value, "disqualifiedUid");
     result.integrityCode = stringAt(value, "integrityCode");
     result.integrityFeatures = stringAt(value, "integrityFeatures");
+    result.rematchDeclined = stringAt(value, "rematchDeclined");  // 1.0.7
     result.draw = boolAt(value, "draw");
     result.oldRating = value["oldRating"].asDouble().unwrapOr(1500.);
     result.newRating = value["newRating"].asDouble().unwrapOr(result.oldRating);
@@ -947,6 +952,10 @@ RankedState parseRankedState(Json const& value) {
     if (value["searchCancel"].isObject()) {
         result.searchCancelOutcome = stringAt(value["searchCancel"], "outcome");
         result.searchCancelsLeft = static_cast<int>(intAt(value["searchCancel"], "left", 0));
+    }
+    if (value["rematchGone"].isObject()) {  // 1.0.7
+        result.rematchGoneMatch = stringAt(value["rematchGone"], "matchId");
+        result.rematchGoneText = stringAt(value["rematchGone"], "reason");
     }
     result.allowDuel = value["allowDuel"].asBool().unwrapOr(true);
     result.duelIncoming = parseDuelRequest(value["duelIncoming"]);
@@ -6192,7 +6201,7 @@ void Service::liftReportBan(std::string uid, Done callback) {
                       });
 }
 // Ranked 대기열/세션 취소. 봇 전투면 로컬에서 끝낸다. searchCancel이면 검색 취소로 기록한다.
-void Service::cancelRanked(RankedStateCallback callback, bool searchCancel, std::string seen) {
+void Service::cancelRanked(RankedStateCallback callback, bool searchCancel, std::string seen, bool declineRematch) {
     if (state().botBattle) {
         endBotBattle();
         callback(state().lastRankedState ? state().lastRankedState : std::optional<RankedState>(RankedState{}), {});
@@ -6203,6 +6212,7 @@ void Service::cancelRanked(RankedStateCallback callback, bool searchCancel, std:
         body["searchCancel"] = true;
         body["seen"] = std::move(seen);
     }
+    if (declineRematch) body["declineRematch"] = true;  // 1.0.7: 서버 _s2_decline_rematch
     rankedRequest("DELETE", rankedPath("session"), std::move(body), std::move(callback));
 }
 // Ranked 매치 진행 API들: 무결성 위반 실격, 후보 맵 제출, 에셋 준비 완료, LDM 설정, 맵 재추첨 요청/투표,

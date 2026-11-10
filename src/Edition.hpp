@@ -11,6 +11,7 @@ namespace cocos2d {
 class CCLabelBMFont;
 class CCNode;
 }
+class SimplePlayer;
 
 namespace versus {
 // 이 빌드가 멤버십 에디션인지 여부.
@@ -41,4 +42,8 @@ char const* nicknameFontFile(int font);
 std::string nicknameFontName(int font);
 // 아이콘에 선택한 오라 효과(이미지 + 파티클)를 붙인다.
 void addMembershipAura(cocos2d::CCNode* icon, bool membership, Cosmetics const& cosmetics = {});
+// 1.0.7: 프로필의 두 색과 Glow를 SimplePlayer에 적용한다(color1/color2/glow는 RGB 정수; glow < 0 = Glow 꺼짐).
+// 모든 플레이어 아이콘(방·매치 판넬·HUD·결과·LIVE·순위·광장·관전)이 이 한 곳을 거친다 — 전에는 자리마다
+// 흰 외곽선을 켜거나 끄거나 해서 GD의 Glow 설정이 반영되지 않았다.
+void applyIconLook(SimplePlayer* icon, int color1, int color2, int glow);
 }

@@ -327,8 +327,7 @@ private:
         int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
         auto* copy = SimplePlayer::create(std::clamp(m_rival.icon, 1, count));
         if (!copy) return;
-        copy->setColors(unpackColor(m_rival.color1), unpackColor(m_rival.color2));
-        copy->disableGlowOutline();
+        applyIconLook(copy, m_rival.color1, m_rival.color2, m_rival.glow);
         copy->setPosition(at);
         copy->setOpacity(140);
         m_stage->addChild(copy, 2);

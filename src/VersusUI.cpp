@@ -553,9 +553,9 @@ int typedNumber(TextInput* input) {
 // 아바타 캐시 키. 닉네임/아이콘/색/멤버십/치장 항목 중 하나라도 바뀌면 키가 달라져 다시 만들게 된다.
 std::string avatarKey(PlayerProfile const& profile) {
     auto const& c = profile.cosmetics;
-    return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", profile.name, profile.icon, profile.color1,
-                       profile.color2, profile.membership, c.start, c.end, c.angle, c.aura, c.execution, c.title,
-                       c.font);
+    return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", profile.name, profile.icon, profile.color1,
+                       profile.color2, profile.glow, profile.membership, c.start, c.end, c.angle, c.aura, c.execution,
+                       c.title, c.font);
 }
 // 유저별 아바타 노드를 재사용하기 위한 캐시. put()으로 이번 갱신에서 쓴 노드를 모아 두고
 // keep()에서 교체하며, detach()는 부모에서 떼어 내 다음 화면에 다시 붙일 수 있게 한다.
@@ -586,8 +586,7 @@ SimplePlayer* player(CCNode* parent, PlayerProfile const& profile, CCPoint point
     auto* manager = GameManager::sharedState();
     int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
     auto* icon = SimplePlayer::create(std::clamp(profile.icon, 1, count));
-    icon->setColors(unpackColor(profile.color1), unpackColor(profile.color2));
-    icon->disableGlowOutline();
+    applyIconLook(icon, profile.color1, profile.color2, profile.glow);
     addMembershipAura(icon, profile.membership, profile.cosmetics);
     icon->setPosition(point);
     icon->setScale(scale);
@@ -6737,7 +6736,7 @@ class RankedLayer final : public SceneLayer {
                     if (auto owner = self.lock(); owner && owner->m_queueGameGeneration == epoch)
                         owner->startQueueGame(game);
                 });
-            })) {
+            }, m_state->queuedAt > 0)) {
             picker->setClosedCallback(queueGameClosedCallback());
             picker->m_scene = this;
             m_queueGame = picker;
@@ -8500,6 +8499,18 @@ class RankedLayer final : public SceneLayer {
             return;
         }
         m_s2HeldState.reset();
+        // 1.0.7: 상대가 무승부 카드에서 뒤로 가기로 재대결을 사양함 - 재대결 대기를 끝내고 알린다(한 번).
+        if (season2DrawWaiting() && m_lastResult) {
+            bool const declined = (!next.rematchGoneMatch.empty() && next.rematchGoneMatch == m_lastResult->matchId) ||
+                                  (next.match && next.match->result && next.match->result->matchId == m_lastResult->matchId &&
+                                   !next.match->result->rematchDeclined.empty() &&
+                                   next.match->result->rematchDeclined != Service::get().profile().uid);
+            if (declined) {
+                m_s2DrawShown = kS2DrawGiveUp;
+                m_notice = next.rematchGoneText.empty() ? "Your opponent left after the draw, so there is no rematch."
+                                                        : next.rematchGoneText;
+            }
+        }
         handleDuels(next);
         if (!m_s2CupSwitch.empty()) return;
         if (m_season2 && !next.matchCup.empty() && next.matchCup != Service::get().rankedCup()) {
@@ -8572,10 +8583,13 @@ class RankedLayer final : public SceneLayer {
             if (!m_lastResult->integrityCode.empty() && m_shownIntegrityResult != m_lastResult->matchId) {
                 m_shownIntegrityResult = m_lastResult->matchId;
                 bool const self = m_lastResult->disqualifiedUid == Service::get().profile().uid;
+                // "You were ... / Your opponent was ..." (11-09: "You was" fixed), the cheat named in the sentence.
+                auto cheats = integrity::featureSummary(m_lastResult->integrityCode, m_lastResult->integrityFeatures);
+                if (cheats.empty()) cheats = "a cheat";
                 auto message = fmt::format(
-                    "{} was <cr>disqualified</c> by the {} anti-cheat.\nDetected: {}\nThe Ranked result was applied immediately.",
-                    self ? "You" : "Your opponent", integrity::sourceName(m_lastResult->integrityCode),
-                    integrity::featureSummary(m_lastResult->integrityCode, m_lastResult->integrityFeatures));
+                    "{} <cr>disqualified</c> for using {} ({} anti-cheat).\nThe Ranked result was applied immediately.",
+                    self ? "You were" : "Your opponent was", cheats,
+                    integrity::sourceName(m_lastResult->integrityCode));
                 FLAlertLayer::create("Anti-Cheat", message.c_str(), "OK")->show();
             }
             m_displayRating = m_lastResult->oldRating;
@@ -8838,10 +8852,10 @@ class RankedLayer final : public SceneLayer {
     // 처리한다:
     // 'kept'(이미 매치가 잡혀 유지됨)이면 경고 팝업, 'free'이면 무료 취소로 패널티 없이
     // 알림만 보낸다.
-    void cancel(bool leave, bool searchCancel = false, std::string seen = {}) {
+    void cancel(bool leave, bool searchCancel = false, std::string seen = {}, bool declineRematch = false) {
         if (m_pending) return;
         m_pending = true;
-        setAction(searchCancel ? "STOPPING..." : "CANCELLING...", false);
+        setAction(searchCancel ? "STOPPING..." : declineRematch ? "LEAVING..." : "CANCELLING...", false);
         Service::get().cancelRanked(
             [self = Weak<RankedLayer>(this), leave, searchCancel](std::optional<RankedState> value,
                                                                   std::string detail) {
@@ -8879,7 +8893,7 @@ class RankedLayer final : public SceneLayer {
                 else if (leave)
                     owner->transitionHome();
             },
-            searchCancel, std::move(seen));
+            searchCancel, std::move(seen), declineRematch);
     }
     // 5분 동안 패널티 없이 탐색을 중단할 수 있는 횟수.
     static constexpr int kSearchCancelsFree = 3;
@@ -9290,6 +9304,14 @@ class RankedLayer final : public SceneLayer {
         }
         if (Service::get().maintenance()) {
             transitionHome();
+            return;
+        }
+        // 1.0.7: Season 2 무승부 카드(재대결 연출·대기 중)에서 뒤로 가기 = 재대결 사양. 전에는 보류해 둔 재대결에
+        // 들어간 뒤 "Leave Ranked?"(닷지)를 묻거나, 먼저 나간 쪽 때문에 상대가 15초 기다리다 취소되고 나간 쪽은
+        // 돌아와서 "상대가 나갔다"는 취소 카드를 받는 등 순서가 꼬였다. 이제 서버에 사양을 알리고 바로 나간다
+        // (서버: 재대결이 막 열렸으면 상대에게 REMATCH_GONE, 아직이면 열지 않고 상대에게 안내; 닷지 아님).
+        if (m_season2 && m_lastResult && m_lastResult->result == "draw" && (m_s2HeldState || season2DrawWaiting())) {
+            cancel(true, false, {}, true);
             return;
         }
         if (m_s2HeldState) {

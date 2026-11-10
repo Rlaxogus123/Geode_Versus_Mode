@@ -181,9 +181,14 @@ constexpr std::array<char const*, 3> kBattleIncompatibleMods = {
     "billgd.death_counter_popup",
     versus::percent::kPercentageToggle,
 };
-// pauseBattleMods(true)처럼 임베디드로 요청할 때만 추가로 정지하는 모드.
-constexpr std::array<char const*, 1> kEmbeddedIncompatibleMods = {
+// pauseBattleMods(true)처럼 임베디드로 요청할 때만 추가로 정지하는 모드: Versus 화면 안 PlayLayer(시즌 2 라운지,
+// 리플레이, 자유 플레이)에서 PlayLayer::onEnter에 람다를 큐에 넣고 그 안에서 보통 플레이 씬에만 있는 것을 읽어
+// 튕기는 모드들.
+// - fracturefx.quickprofile: 11-02 01:25 크래시 로그(컵 들어갈 때/돌아올 때).
+// - mishpro.comments_in_pause_menu: 11-09 크래시 로그(랭크 로비 입장, FixedPlayLayer::onEnterH 람다가 0x0 읽음).
+constexpr std::array<char const*, 2> kEmbeddedIncompatibleMods = {
     "fracturefx.quickprofile",
+    "mishpro.comments_in_pause_menu",
 };
 // 정지한 훅 목록과 그 훅이 속한 PlayLayer.
 std::vector<Hook*> s_pausedHooks;

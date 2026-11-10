@@ -42,9 +42,6 @@ constexpr float kOutsideGroupSeconds = 1.f, kOutsideListSeconds = 3.f;
 // 선두 카드의 크기와 진행 바 폭.
 constexpr float kLeaderW = 166.f, kLeaderH = 58.f, kLeaderBarW = 112.f;
 
-ccColor3B rgb(int value) {
-    return ccc3((value >> 16) & 255, (value >> 8) & 255, value & 255);
-}
 // 탈락한 좌석인지(포기, 탈락, 실격).
 bool outOf(GroupSeat const& seat) {
     return seat.state.forfeited || seat.out || seat.disqualified;
@@ -474,8 +471,7 @@ public:
             auto* manager = GameManager::sharedState();
             int const icons = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
             auto* icon = SimplePlayer::create(std::clamp(seat.profile.icon, 1, icons));
-            icon->setColors(rgb(seat.profile.color1), rgb(seat.profile.color2));
-            icon->setGlowOutline(ccWHITE);
+            applyIconLook(icon, seat.profile.color1, seat.profile.color2, seat.profile.glow);
             addMembershipAura(icon, seat.profile.membership, seat.profile.cosmetics);
             icon->setScale(.52f);
             leaderIcon->addChild(icon);

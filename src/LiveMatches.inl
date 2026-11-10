@@ -109,7 +109,7 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
         auto* manager = GameManager::sharedState();
         int const count = manager ? std::max(1, manager->countForType(IconType::Cube)) : 1;
         auto* icon = SimplePlayer::create(std::clamp(player.profile.icon, 1, count));
-        icon->setColors(unpackColor(player.profile.color1), unpackColor(player.profile.color2));
+        applyIconLook(icon, player.profile.color1, player.profile.color2, player.profile.glow);
         icon->setScale(.42f);
         icon->setPosition({16.f, y});
         cell->addChild(icon);
