@@ -958,7 +958,7 @@ public:
     void searchRankedPlayers(std::string query, std::function<void(std::vector<RankedProfile>, std::string)> callback);
     // Ranked 대기열, 듀얼, 이모트.
     void joinRankedQueue(RankedStateCallback callback);
-    // declineRematch: 무승부 카드에서 뒤로 가기(1.0.7) - 재대결을 사양한다(닷지 아님).
+    // declineRematch: 무승부 카드에서 뒤로 가기(1.0.7) - 재대결을 사양한다(닷지 1개).
     void cancelRanked(RankedStateCallback callback, bool searchCancel = false, std::string seen = {},
                       bool declineRematch = false);
     void challengeRanked(std::string targetUid, bool anonymous, RankedStateCallback callback);

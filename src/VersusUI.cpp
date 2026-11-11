@@ -8931,6 +8931,20 @@ class RankedLayer final : public SceneLayer {
                                   dodge.penaltyLosses, dodge.blockMinutes);
         return text + "Cancel during synchronization counts as a <cr>forfeit</c>.";
     }
+    // 무승부 카드에서 나갈 때의 경고: 재대결 사양 = 닷지 1개(서버 _s2_decline_rematch).
+    std::string drawLeaveWarning() const {
+        std::string text = "Leaving now <cy>declines the rematch</c>";
+        if (!m_state || !m_state->dodge.known) return text + " and counts as a <cr>dodge</c>.";
+        auto const& dodge = m_state->dodge;
+        int const after = dodge.stack + 1;
+        text += fmt::format(" and is <cr>1 dodge</c> (stack <cy>{}/{}</c> -> <cr>{}</c>).\n", dodge.stack, dodge.limit,
+                            std::min(after, dodge.limit));
+        return text + (after >= dodge.limit
+                           ? fmt::format("<cr>Penalty now:</c> rating as {} losses + {} min without matchmaking.",
+                                         dodge.penaltyLosses, dodge.blockMinutes)
+                           : fmt::format("At {}: rating as {} losses + {} min without matchmaking.", dodge.limit,
+                                         dodge.penaltyLosses, dodge.blockMinutes));
+    }
     // 탐색을 멈추는 순간 매치가 잡힌 경우, 계속 머물지 떠날지 묻는 확인창.
     void warnCrossedMatch(bool leave, int left) {
         if (m_cancelDialog || m_transitioning || !m_state || !m_state->match) return;
@@ -9322,9 +9336,19 @@ class RankedLayer final : public SceneLayer {
         // 1.0.7: Season 2 무승부 카드(재대결 연출·대기 중)에서 뒤로 가기 = 재대결 사양. 전에는 보류해 둔 재대결에
         // 들어간 뒤 "Leave Ranked?"(닷지)를 묻거나, 먼저 나간 쪽 때문에 상대가 15초 기다리다 취소되고 나간 쪽은
         // 돌아와서 "상대가 나갔다"는 취소 카드를 받는 등 순서가 꼬였다. 이제 서버에 사양을 알리고 바로 나간다
-        // (서버: 재대결이 막 열렸으면 상대에게 REMATCH_GONE, 아직이면 열지 않고 상대에게 안내; 닷지 아님).
+        // (서버: 재대결이 막 열렸으면 상대에게 REMATCH_GONE, 아직이면 열지 않고 상대에게 안내).
+        // 11-11: 재대결 사양은 닷지 1개 — 나가기 전에 확인창으로 묻는다.
         if (m_season2 && m_lastResult && m_lastResult->result == "draw" && (m_s2HeldState || season2DrawWaiting())) {
-            cancel(true, false, {}, true);
+            if (m_cancelDialog) return;
+            m_cancelDialog = true;
+            createQuickPopup("Leave the Rematch?", drawLeaveWarning(), "Stay", "Leave", 380.f,
+                             [self = Weak<RankedLayer>(this)](auto*, bool yes) {
+                                 auto owner = self.lock();
+                                 if (!owner) return;
+                                 owner->m_cancelDialog = false;
+                                 if (yes && !owner->m_pending && !owner->m_transitioning)
+                                     owner->cancel(true, false, {}, true);
+                             });
             return;
         }
         if (m_s2HeldState) {
