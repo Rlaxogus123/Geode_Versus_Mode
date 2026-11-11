@@ -4,7 +4,6 @@
 #include "UpdateManager.hpp"
 #include "../Edition.hpp"
 #include "../DebugMode.hpp"
-#include "../FirebaseConfig.hpp"
 #include <Geode/binding/GJAccountManager.hpp>
 #include "UpdateIntegration.hpp"
 #include <Geode/Geode.hpp>
@@ -59,33 +58,10 @@ std::string string(matjson::Value const& value, char const* key) {
     require(field.isOk() && field.unwrap().isString(), "Missing manifest field");
     return field.unwrap().asString().unwrap();
 }
-// 1.0.7: Versus 서버가 받아 주는 릴리스(release.json의 version, "v1.0.7" 꼴 → "1.0.7"). 서버에 닿지 못하면
-// (점검 중 503, 네트워크) 빈 문자열: 그때는 확인 없이 Versus로 들어가고, 서버가 다시 답하면 그 화면에서
-// 업데이트 안내(X-Versus-Latest / 426)가 뜬다.
-std::string fetchServerRelease() {
-    auto const url = fmt::format("{}/{}/release.json", firebase_config::DATABASE_URL, debug::apiRoot());
-    auto response = withRetry([&] {
-        auto req = request();
-        req.timeout(std::chrono::seconds(8));
-        return req.getSync(url);
-    });
-    if (response.code() != 200 || response.data().size() > 4096) return {};
-    auto parsed = response.json();
-    if (!parsed.isOk() || !parsed.unwrap().isObject()) return {};
-    auto field = parsed.unwrap().get("version");
-    if (!field.isOk() || !field.unwrap().isString()) return {};
-    auto version = field.unwrap().asString().unwrap();
-    if (!version.empty() && version.front() == 'v') version.erase(0, 1);
-    return versionValid(version) ? version : std::string();
-}
-// 서버가 정한 버전의 GitHub 릴리스 매니페스트를 받아 검증한다.
-// modId, 채널(public), 스키마(1), 크기 범위, 정책 필드, 패키지 주소, 그리고 그 버전인지 확인한다.
-Manifest fetchManifest(std::string const& version) {
-    auto response = withRetry([&] { return request().getSync(manifestUrl(version)); });
-    require(response.code() != 404,
-            fmt::format("The server runs Versus v{}, but that release is not on GitHub yet. Retry later.", version)
-                .c_str());
-    auto value = json(response);
+// GitHub 최신 릴리스의 매니페스트를 받아 검증한다.
+// modId, 채널(public), 스키마(1), 크기 범위, 정책 필드, 패키지 주소를 확인한다.
+Manifest fetchManifest() {
+    auto value = json(withRetry([&] { return request().getSync(manifestUrl()); }));
     std::string const channel = "public";
     require(string(value, "modId") == "tipp7.versus" && string(value, "channel") == channel,
             "Manifest identity mismatch");
@@ -98,7 +74,6 @@ Manifest fetchManifest(std::string const& version) {
     Manifest m{string(value, "version"),      string(value, "url"),
                string(value, "sha256"),       channel,
                static_cast<uint64_t>(number), mandatory.unwrap().asBool().unwrap()};
-    require(m.version == version, "Manifest version mismatch");
     ManifestVerifier().validate(m);
     return m;
 }
@@ -173,23 +148,14 @@ void UpdateManager::authorize() {
         fail(error.what());
     }
 }
-// 1.0.7: 서버가 받아 주는 버전을 먼저 묻고, 설치된 버전과 비교해 상태를 정한다.
-// 같으면 GitHub를 보지 않고 Current(바로 입장). 서버 버전이 더 새로우면 그 버전의 매니페스트를 받아
-// UpdateAvailable. 서버 버전이 더 낮으면 오류(제작자 계정의 디버그 빌드는 예외). 서버에 닿지 못하면 Current로
-// 두어 Versus 화면이 점검 안내를 보여 주게 한다.
+// 매니페스트를 받아 설치된 버전과 비교해 상태를 정한다.
+// 서버 버전이 더 낮으면 오류(제작자 계정의 디버그 빌드는 예외).
+// 같은 릴리스면 Current, 아니면 UpdateAvailable.
 void UpdateManager::performCheck() {
-    auto const server = fetchServerRelease();
+    auto manifest = fetchManifest();
     require(!m_cancel, "Update check canceled");
     auto old = snapshot();
-    if (server.empty()) {
-        std::lock_guard lock(m_mutex);
-        m_snapshot.manifest = Manifest{};
-        m_snapshot.busy = false;
-        m_snapshot.state = UpdateState::Current;
-        m_snapshot.message = "Versus server not reachable; continuing";
-        return;
-    }
-    auto latest = VersionInfo::parse(server), current = VersionInfo::parse(old.installedVersion);
+    auto latest = VersionInfo::parse(manifest.version), current = VersionInfo::parse(old.installedVersion);
     require(latest.isOk() && current.isOk(), "Invalid release version");
     bool const debugBuild = m_creator && latest.unwrap() < current.unwrap();
     {
@@ -198,17 +164,6 @@ void UpdateManager::performCheck() {
     }
     require(debugBuild || current.unwrap() <= latest.unwrap(),
             "Server release is older than this installation. Please retry later.");
-    if (debugBuild || sameRelease(old.installedVersion, server)) {
-        std::lock_guard lock(m_mutex);
-        m_snapshot.manifest = Manifest{};
-        m_snapshot.manifest.version = server;
-        m_snapshot.busy = false;
-        m_snapshot.state = UpdateState::Current;
-        m_snapshot.message = debugBuild ? "Debug build (newer than the server)" : "Up to date";
-        return;
-    }
-    auto manifest = fetchManifest(server);
-    require(!m_cancel, "Update check canceled");
     std::lock_guard lock(m_mutex);
     // 플랫폼 패키지가 쓸 수 없다고 판명된 버전은 통합 패키지로 바꾼다.
     if (!manifest.platform.empty() && manifest.version == m_unifiedOnly) manifest = manifest.unified();

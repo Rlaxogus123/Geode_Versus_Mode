@@ -16,11 +16,9 @@ namespace fs = std::filesystem;
 // 공개 저장소의 GitHub Release 주소. 매니페스트와 패키지는 여기서만 받는다.
 // 릴리스는 GitHub Actions가 공개된 소스 코드로 빌드해 올린다(.github/workflows/build.yml).
 inline constexpr char RELEASES[] = "https://github.com/Rlaxogus123/Geode_Versus_Mode/releases";
-// 버전 X.Y.Z 릴리스의 매니페스트 주소. 1.0.7: "어느 버전을 받을지"는 Versus 서버가 정한다(release.json의
-// version = 서버가 받아 주는 버전). 전에는 GitHub의 "latest" 릴리스를 받았는데, 릴리스가 서버 전환보다 먼저
-// 올라가면 게임이 새 버전으로 바뀐 뒤 서버에 거부당해(426) 업데이트 안내가 끝없이 반복됐다.
-inline std::string manifestUrl(std::string const& version) {
-    return std::string(RELEASES) + "/download/v" + version + "/manifest.json";
+// 최신 릴리스의 매니페스트 주소.
+inline std::string manifestUrl() {
+    return std::string(RELEASES) + "/latest/download/manifest.json";
 }
 // 버전 X.Y.Z 릴리스의 통합 패키지 주소.
 inline std::string packageUrl(std::string const& version) {
