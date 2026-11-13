@@ -72,11 +72,12 @@ inline constexpr std::array<CheatFeature, 22> kEclipseCheatFeatures{{
 }};
 
 // 로드되어 있으면 안 되는 모드(Geode 모드 ID와 이름).
-inline constexpr std::array<CheatFeature, 4> kBannedMods{{
+inline constexpr std::array<CheatFeature, 5> kBannedMods{{
     {"mythicalrev.noclip-at", "Noclip At"},
     {"tobyadd.gdh", "GDH"},
     {"zilko.xdbot", "xdBot"},
     {"peony.silicate", "Silicate"},
+    {"decks.echo", "Echo"},  // 1.0.8: 리플레이 봇(노클립 등), 켜져 있기만 해도
 }};
 // 더 이상 금지하지 않지만 과거 기록을 표시하기 위해 이름만 유지하는 모드.
 inline constexpr std::array<CheatFeature, 1> kRetiredBannedMods{{

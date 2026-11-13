@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.8 (in progress)
+
+### Fixes
+- Minesweeper (and the other mini game windows): the window scales down on screens shorter or narrower than it, so the close button is no longer cut off at the top.
+- Anti-cheat: Echo (decks.echo), a replay bot with noclip and other cheats, counts as a cheat while it is loaded, like xdBot and Silicate.
+
 ## v1.0.7 (in progress)
 
 ### Interface

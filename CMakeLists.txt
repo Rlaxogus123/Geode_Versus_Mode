@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(Versus VERSION 1.0.7 LANGUAGES C CXX)
+project(Versus VERSION 1.0.8 LANGUAGES C CXX)
 
 # Windows 로컬 빌드는 성공하면 현재 Geode 프로필에 바로 설치한다.
 if(WIN32)

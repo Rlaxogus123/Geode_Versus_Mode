@@ -10,6 +10,19 @@ protected:
 
 public:
     void setClosedCallback(std::function<void()> closed) { m_queueClosed = std::move(closed); }
+    // 화면이 창(닫기 버튼 포함, 가장자리 18)보다 낮거나 좁으면 창 전체를 같은 비율로 줄여서 띄운다
+    // (지뢰찾기 350x310은 높이 320 화면에서 닫기 버튼이 화면 위로 나갔음). 안의 배치는 설계 크기 그대로.
+    void show() override {
+        DeferredPopup::show();
+        constexpr float kEdge = 18.f;
+        auto const win = CCDirector::sharedDirector()->getWinSize();
+        float const fit = std::min({1.f, (win.width - 2.f * kEdge) / std::max(1.f, m_size.width),
+                                    (win.height - 2.f * kEdge) / std::max(1.f, m_size.height)});
+        if (fit >= 1.f || fit <= 0.f) return;
+        m_mainLayer->stopAllActions();
+        m_mainLayer->setScale(.1f * fit);
+        m_mainLayer->runAction(CCEaseElasticOut::create(CCScaleTo::create(.5f, fit), .6f));
+    }
     // 한 번만 실행되는 닫기. 콜백을 먼저 꺼낸 뒤 입력/스케줄을 끊고 팝업을 닫은 다음 콜백을 호출한다.
     void dismiss() {
         if (m_queueDismissed) return;

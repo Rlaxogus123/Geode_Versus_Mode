@@ -45,7 +45,7 @@ EXTERNAL_INTEGRITY_CODES = {"eclipse:enabled", "eclipse:attempt", "qol:enabled",
 # 켜져 있기만 해도 치트로 보는 Geode 모드("mod:enabled", 값은 모드 ID). Percentage Toggle은 지금 게임이
 # 보내지 않지만(대결 중에는 Versus가 그 모드를 멈춘다) 예전 보고를 위해 남겨 둔다.
 BANNED_MOD_FEATURES = {"mythicalrev.noclip-at", "tobyadd.gdh", "zsa.percentage-toggle", "zilko.xdbot",
-                       "peony.silicate"}
+                       "peony.silicate", "decks.echo"}
 
 # 각 핵 메뉴에서 치트로 보는 기능. GD 기본(1초)보다 느린 리스폰 시간도 치트다(Click On Steps는 아님).
 # 지금 게임이 보내지 않는 이름도 예전 보고를 위해 남겨 둔다.
