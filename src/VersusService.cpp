@@ -4944,7 +4944,8 @@ void Service::fetchSeason2Home(std::function<void(std::vector<Season2Cup>, std::
             for (auto const& row : value.unwrap()["cups"].asArray().unwrap()) {
                 if (!row.isObject() || cups.size() >= 4) continue;
                 cups.push_back({stringAt(row, "id"), stringAt(row, "name"), parseRankedProfile(row["profile"]),
-                                static_cast<int>(intAt(row, "online", -1))});
+                                static_cast<int>(intAt(row, "online", -1)),
+                                static_cast<int>(std::max<int64_t>(0, intAt(row, "mapBans")))});
             }
             callback(std::move(cups), {});
         });
@@ -5302,6 +5303,7 @@ ModLogEntry parseModLogEntry(Json const& entry) {
         result.message = stringAt(detail, "message");
         result.levelId = intAt(detail, "levelId");
         result.creator = stringAt(detail, "creator");
+        result.cup = stringAt(detail, "cup");
     }
     return result;
 }
@@ -5356,17 +5358,17 @@ void Service::addStaff(std::string uid, StaffCallback callback) {
 void Service::removeStaff(std::string uid, StaffCallback callback) {
     staffRequest("DELETE", "admin/staff/" + uid, Json::object(), std::move(callback));
 }
-// 1.0.8: 랭크 맵 밴 API. 응답의 maps 배열(최대 600개)과 limit 를 콜백에 넘긴다.
+// 1.0.8: 컵별 맵 밴 API. 응답의 maps 배열(최대 600개), limit, staff 를 콜백에 넘긴다.
 void staffMapRequest(std::string method, std::string path, Json body, Service::StaffMapBansCallback callback) {
     moderationRequest(std::move(method), std::move(path), std::move(body),
                       [callback = std::move(callback)](std::optional<Json> value, std::string error) {
-                          std::vector<StaffMapBan> maps;
                           if (!value) {
-                              callback(std::move(maps), 0,
-                                       error.empty() ? std::string("The map bans could not be loaded.")
-                                                     : std::move(error));
+                              callback(std::nullopt, error.empty() ? std::string("The map bans could not be loaded.")
+                                                                   : std::move(error));
                               return;
                           }
+                          StaffMapBanList list;
+                          auto& maps = list.maps;
                           if ((*value)["maps"].isArray())
                               for (auto const& entry : (*value)["maps"].asArray().unwrap()) {
                                   if (!entry.isObject() || maps.size() >= 600) continue;
@@ -5380,21 +5382,23 @@ void staffMapRequest(std::string method, std::string path, Json body, Service::S
                                   map.byName = stringAt(entry, "byName");
                                   if (map.levelId > 0) maps.push_back(std::move(map));
                               }
-                          callback(std::move(maps), static_cast<int>(intAt(*value, "limit")), {});
+                          list.limit = static_cast<int>(intAt(*value, "limit"));
+                          list.staff = boolAt(*value, "staff");
+                          callback(std::move(list), {});
                       });
 }
-void Service::fetchStaffMapBans(StaffMapBansCallback callback) {
-    staffMapRequest("GET", "admin/maps", {}, std::move(callback));
+void Service::fetchStaffMapBans(std::string cup, StaffMapBansCallback callback) {
+    staffMapRequest("GET", fmt::format("ranked2/{}/map-bans", cup), {}, std::move(callback));
 }
-void Service::banStaffMap(LevelInfo const& level, std::string reason, StaffMapBansCallback callback) {
+void Service::banStaffMap(std::string cup, LevelInfo const& level, std::string reason, StaffMapBansCallback callback) {
     auto body = Json::object();
     body["name"] = level.name.substr(0, 64);
     body["creator"] = level.creator.substr(0, 32);
     body["reason"] = reason.substr(0, 200);
-    staffMapRequest("PUT", fmt::format("admin/maps/{}", level.id), std::move(body), std::move(callback));
+    staffMapRequest("PUT", fmt::format("admin/maps/{}/{}", cup, level.id), std::move(body), std::move(callback));
 }
-void Service::unbanStaffMap(int64_t levelId, StaffMapBansCallback callback) {
-    staffMapRequest("DELETE", fmt::format("admin/maps/{}", levelId), Json::object(), std::move(callback));
+void Service::unbanStaffMap(std::string cup, int64_t levelId, StaffMapBansCallback callback) {
+    staffMapRequest("DELETE", fmt::format("admin/maps/{}/{}", cup, levelId), Json::object(), std::move(callback));
 }
 void Service::findStaffCandidates(std::string name,
                                   std::function<void(std::vector<StaffCandidate>, std::string)> callback) {

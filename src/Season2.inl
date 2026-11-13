@@ -583,6 +583,363 @@ public:
 // Season 2 메인 화면. 컵 카드 두 장(standard, demon)에 티어 이미지, 레이팅 / 배치 진행,
 // 순위, 접속자 수, PLAY 버튼을 보여 준다. 서버에서 10초마다 정보를 다시 받는다.
 // 맵 / 오디오 다운로드 진행 상황도 하단에 표시한다 (lounge 모듈에서 가져옴).
+// 1.0.8: 컵 카드의 맵 밴 창. 이 컵의 랭크에 나오지 않는 맵 목록을 모든 플레이어가 보고, 스태프는 레벨 ID 로
+// GD 에서 레벨을 찾아 사유와 함께 밴하거나(이미 밴이면 사유 변경) 다시 넣을(Put Back) 수 있다. 사유와 밴한 스태프는
+// 스태프에게만 보인다(서버가 staff 일 때만 보냄). 스태프의 모든 변경은 모더레이션 로그에 남는다.
+class Season2MapBansPopup final : public ::versus::DeferredPopup {
+    static constexpr float W = 440.f, H = 290.f;
+    static constexpr int kRows = 4, kFoundRows = 3, kPlayerRows = 5;
+    std::string m_cup;
+    std::function<void()> m_changed;
+    std::vector<StaffMapBan> m_maps;
+    int m_limit = 0, m_page = 0;
+    bool m_staff = false, m_loaded = false, m_busy = false, m_looking = false;
+    std::string m_error, m_lookupError;
+    std::optional<LevelInfo> m_found;
+    TextInput* m_id = nullptr;
+    TextInput* m_reason = nullptr;
+    CCNode* m_rows = nullptr;
+    CCNode* m_foundNode = nullptr;
+    CCLabelBMFont* m_info = nullptr;
+    CCLabelBMFont* m_status = nullptr;
+    CCLabelBMFont* m_count = nullptr;
+    CCLabelBMFont* m_pageLabel = nullptr;
+    CCMenuItemSpriteExtra *m_previous = nullptr, *m_next = nullptr, *m_find = nullptr, *m_ban = nullptr;
+    void onExit() override {
+        if (m_id) m_id->defocus();
+        if (m_reason) m_reason->defocus();
+        Popup::onExit();
+    }
+    bool init(std::string cup, std::function<void()> changed) {
+        if (!Popup::init(W, H, "GJ_square02.png")) return false;
+        m_cup = std::move(cup);
+        m_changed = std::move(changed);
+        m_staff = Service::get().isAdmin();
+        setTitle(fmt::format("{} - Banned Maps", season2CupName(m_cup)).c_str(), "goldFont.fnt", .65f);
+        setID("versus-season2-map-bans"_spr);
+        m_info = label(m_mainLayer, "", {W / 2.f, 248.f}, .4f, 400.f, kMuted, false, "chatFont.fnt");
+        m_id = TextInput::create(130.f, "Level ID");
+        m_id->setCommonFilter(CommonFilter::Uint);
+        m_id->setMaxCharCount(10);
+        m_id->setPosition({87.f, 222.f});
+        styleInput(m_id);
+        m_mainLayer->addChild(m_id);
+        m_find = button(m_buttonMenu, this, menu_selector(Season2MapBansPopup::onFind), "Find", {190.f, 222.f}, .5f,
+                        "GJ_button_02.png");
+        m_count = rightLabel(m_mainLayer, "", {420.f, 222.f}, .4f, 150.f, kIce);
+        m_foundNode = CCNode::create();
+        m_mainLayer->addChild(m_foundNode);
+        // 사유 입력은 찾은 레벨이 있을 때만 보인다(다시 그릴 때 입력한 글이 지워지지 않게 한 번만 만든다).
+        m_reason = TextInput::create(300.f, "Reason (required; staff only)");
+        m_reason->setCommonFilter(CommonFilter::Any);
+        m_reason->setMaxCharCount(160);
+        m_reason->setPosition({174.f, 164.f});
+        styleInput(m_reason);
+        m_mainLayer->addChild(m_reason, 3);
+        m_ban = button(m_buttonMenu, this, menu_selector(Season2MapBansPopup::onBan), "Ban", {378.f, 164.f}, .5f,
+                       "GJ_button_06.png");
+        m_rows = CCNode::create();
+        m_mainLayer->addChild(m_rows);
+        m_status = label(m_mainLayer, "Loading...", {W / 2.f, 120.f}, .5f, 380.f, kIce, false, "chatFont.fnt");
+        m_previous =
+            button(m_buttonMenu, this, menu_selector(Season2MapBansPopup::onPrevious), "<", {170.f, 24.f}, .45f);
+        m_next = button(m_buttonMenu, this, menu_selector(Season2MapBansPopup::onNext), ">", {270.f, 24.f}, .45f);
+        m_pageLabel = label(m_mainLayer, "1 / 1", {W / 2.f, 24.f}, .33f, 70.f, kIce);
+        iconButton(m_buttonMenu, this, menu_selector(Season2MapBansPopup::onRefresh), "GJ_updateBtn_001.png",
+                   {408.f, 26.f}, 28.f);
+        load();
+        return true;
+    }
+    void received(std::optional<StaffMapBanList> list, std::string error) {
+        m_loaded = true;
+        m_busy = false;
+        m_error = std::move(error);
+        if (list) {
+            m_error.clear();
+            m_maps = std::move(list->maps);
+            m_limit = list->limit;
+            m_staff = list->staff;
+        }
+        render();
+    }
+    void load() {
+        m_loaded = false;
+        render();
+        Service::get().fetchStaffMapBans(
+            m_cup, [self = Weak<Season2MapBansPopup>(this)](std::optional<StaffMapBanList> list, std::string error) {
+                if (auto owner = self.lock()) owner->received(std::move(list), std::move(error));
+            });
+    }
+    StaffMapBan const* banned(int64_t id) const {
+        for (auto const& map : m_maps)
+            if (map.levelId == id) return &map;
+        return nullptr;
+    }
+    static std::string mapName(std::string const& name, int64_t id) {
+        return name.empty() ? fmt::format("Level {}", id) : name;
+    }
+    // 사유는 한글일 수 있어 ASCII 가 아니면 시스템 글꼴로 그린다.
+    static void reasonText(CCNode* parent, std::string const& text, CCPoint at, float maxWidth, ccColor3B color) {
+        auto shown = previewLine(text.empty() ? std::string("No reason") : text, 60);
+        if (asciiOnly(shown)) {
+            label(parent, shown, at, .36f, maxWidth, color, true, "chatFont.fnt");
+            return;
+        }
+        auto* system = createSystemText(shown, 11.f, 0.f, kCCTextAlignmentLeft);
+        system->setColor(color);
+        system->setAnchorPoint({0.f, .5f});
+        if (system->getContentSize().width > maxWidth) system->setScale(maxWidth / system->getContentSize().width);
+        system->setPosition(at);
+        parent->addChild(system);
+    }
+    // 스태프: 찾은 레벨 카드, 사유 입력/밴 버튼, 목록. 플레이어: 목록만(한 페이지에 더 많이).
+    void render() {
+        m_rows->removeAllChildrenWithCleanup(true);
+        m_foundNode->removeAllChildrenWithCleanup(true);
+        int const count = static_cast<int>(m_maps.size());
+        m_info->setString(m_staff ? "Maps here never come up in this cup's Ranked matches until put back. "
+                                    "Every change is logged."
+                                  : "These maps never come up in this cup's Ranked matches.");
+        m_info->limitLabelWidth(400.f, .4f, .2f);
+        m_id->setVisible(m_staff);
+        m_find->setVisible(m_staff);
+        m_count->setString(!m_loaded                ? ""
+                           : m_staff && m_limit > 0 ? fmt::format("{} / {} banned", count, m_limit).c_str()
+                                                    : fmt::format("{} banned", count).c_str());
+        m_count->setPosition(m_staff ? CCPoint{420.f, 222.f} : CCPoint{150.f, 24.f});  // (플레이어: 아래 줄 왼쪽)
+        enabled(m_find, !m_busy && !m_looking);
+        bool const showFound = m_staff && (m_looking || m_found.has_value());
+        m_reason->setVisible(m_staff && m_found.has_value());
+        m_ban->setVisible(m_staff && m_found.has_value());
+        if (showFound) {
+            auto* cell = panel(m_foundNode, {16.f, 182.f}, {408.f, 30.f}, false);
+            if (m_looking)
+                label(cell, "Looking the level up on GD...", {204.f, 15.f}, .42f, 380.f, kIce, false, "chatFont.fnt");
+            else {
+                auto const& level = *m_found;
+                float x = 8.f;
+                if (m_lookupError.empty())
+                    if (auto* face = mapDifficulty(level)) {
+                        face->setScale(22.f / std::max(1.f, face->getContentSize().height));
+                        face->setPosition({20.f, 15.f});
+                        cell->addChild(face);
+                        x = 36.f;
+                    }
+                bool const already = banned(level.id) != nullptr;
+                label(cell, mapName(level.name, level.id), {x, 21.f}, .34f, already ? 200.f : 360.f - x, ccWHITE, true);
+                label(cell,
+                      m_lookupError.empty()
+                          ? fmt::format("by {}  |  ID {}", level.creator.empty() ? "?" : level.creator, level.id)
+                          : fmt::format("ID {}  |  {} You can still ban it by its ID.", level.id, m_lookupError),
+                      {x, 8.f}, .34f, 370.f - x, kMuted, true, "chatFont.fnt");
+                if (auto const* ban = banned(level.id))
+                    rightLabel(cell, "Banned by " + (ban->byName.empty() ? std::string("Admin") : ban->byName),
+                               {400.f, 21.f}, .36f, 140.f, ccc3(255, 130, 115));
+            }
+            if (m_found) {
+                auto* sprite = ButtonSprite::create(banned(m_found->id) ? "Save" : "Ban", "goldFont.fnt",
+                                                    "GJ_button_06.png");
+                sprite->setScale(.5f);
+                m_ban->setNormalImage(sprite);
+                m_ban->updateSprite();
+                enabled(m_ban, !m_busy);
+            }
+        }
+        int const perPage = !m_staff ? kPlayerRows : showFound ? kFoundRows : kRows;
+        float const listTop = !m_staff ? 240.f : showFound ? 148.f : 206.f;
+        int const pages = std::max(1, (count + perPage - 1) / perPage);
+        m_page = std::clamp(m_page, 0, pages - 1);
+        m_pageLabel->setString(fmt::format("{} / {}", m_page + 1, pages).c_str());
+        enabled(m_previous, m_page > 0);
+        enabled(m_next, m_page + 1 < pages);
+        m_status->setVisible(!m_loaded || !m_error.empty() || count == 0);
+        m_status->setString(!m_loaded          ? "Loading..."
+                            : !m_error.empty() ? m_error.c_str()
+                            : m_staff          ? "No map is banned in this cup. Find a level by its ID to ban it."
+                                               : "No map is banned in this cup.");
+        m_status->setPositionY(listTop - 60.f);
+        m_status->limitLabelWidth(380.f, .5f, .2f);
+        if (!m_loaded || !m_error.empty()) return;
+        auto* rows = menu(m_rows);
+        auto const now = Service::get().serverNow();
+        for (int row = 0; row < perPage; ++row) {
+            int const index = m_page * perPage + row;
+            if (index >= count) break;
+            auto const& map = m_maps[index];
+            float const y = listTop - 16.f - row * 34.f;
+            auto* cell = panel(m_rows, {16.f, y - 15.f}, {408.f, 30.f}, false);
+            auto* nameLabel = createCosmeticLabel(mapName(map.name, map.levelId).c_str(), "bigFont.fnt");
+            nameLabel->setScale(std::min(.34f, (m_staff ? 170.f : 250.f) / std::max(1.f, nameLabel->getContentSize().width)));
+            auto* name = CCMenuItemSpriteExtra::create(nameLabel, this, menu_selector(Season2MapBansPopup::onDetail));
+            name->setAnchorPoint({0.f, .5f});
+            name->setPosition({24.f, y + 6.f});
+            name->setTag(index);
+            rows->addChild(name);
+            label(cell, fmt::format("ID {}", map.levelId), {16.f + nameLabel->getScaledContentSize().width, 21.f},
+                  .34f, 80.f, kMuted, true, "chatFont.fnt");
+            if (m_staff) {
+                reasonText(cell, map.reason, {8.f, 8.f}, 210.f, kIce);
+                rightLabel(cell,
+                           fmt::format("{}  |  {}", map.byName.empty() ? std::string("Admin") : map.byName,
+                                       agoText(now - map.at)),
+                           {330.f, 8.f}, .32f, 105.f, kMuted);
+                auto* back = button(rows, this, menu_selector(Season2MapBansPopup::onPutBack), "Put Back", {386.f, y},
+                                    .36f, "GJ_button_01.png");
+                back->setTag(index);
+                enabled(back, !m_busy);
+            } else {
+                label(cell, map.creator.empty() ? std::string("by ?") : "by " + map.creator, {8.f, 8.f}, .34f, 250.f,
+                      kIce, true, "chatFont.fnt");
+                rightLabel(cell, "Banned " + agoText(now - map.at), {400.f, 15.f}, .36f, 130.f, kMuted);
+            }
+        }
+    }
+    // 입력한 ID 의 레벨을 GD 에서 찾는다. 못 찾아도 ID 로 밴할 수 있게 카드를 보여 준다.
+    void onFind(CCObject*) {
+        if (!m_staff || m_busy || m_looking) return;
+        m_id->defocus();
+        std::string const text(m_id->getString());
+        int64_t id = 0;
+        auto const parsed = std::from_chars(text.data(), text.data() + text.size(), id);
+        if (text.empty() || parsed.ec != std::errc() || parsed.ptr != text.data() + text.size() || id <= 0 ||
+            id > 2'147'483'647) {
+            Notification::create("Enter a level ID", NotificationIcon::Warning)->show();
+            return;
+        }
+        m_looking = true;
+        m_found.reset();
+        m_lookupError.clear();
+        render();
+        lookupLevel(id, [self = Weak<Season2MapBansPopup>(this), id](std::optional<LevelInfo> level, std::string error) {
+            auto owner = self.lock();
+            if (!owner) return;
+            owner->m_looking = false;
+            if (level) {
+                owner->m_found = std::move(level);
+            } else {
+                LevelInfo unknown;
+                unknown.id = id;
+                owner->m_found = unknown;
+                owner->m_lookupError = error.empty() ? std::string("Not found on GD's servers.") : std::move(error);
+            }
+            if (auto const* ban = owner->banned(id); ban && owner->m_reason->getString().empty())
+                owner->m_reason->setString(ban->reason);
+            owner->render();
+        });
+    }
+    static void error_(std::string const& text) { error(text); }
+    // 서버가 돌려준 새 목록을 반영하고, 컵 카드의 버튼 표시를 갱신하게 한다.
+    void changed(std::optional<StaffMapBanList> list, std::string error, char const* done) {
+        if (!list) {
+            m_busy = false;
+            render();
+            error_(error);
+            return;
+        }
+        Notification::create(done, NotificationIcon::Success)->show();
+        received(std::move(list), {});
+        if (m_changed) m_changed();
+    }
+    // 사유를 확인하고 확인창을 거쳐 밴(이미 밴된 맵이면 사유 변경)한다.
+    void onBan(CCObject*) {
+        if (!m_staff || m_busy || !m_found) return;
+        m_reason->defocus();
+        std::string reason(m_reason->getString());
+        if (reason.find_first_not_of(' ') == std::string::npos) {
+            Notification::create("Write the reason for the ban", NotificationIcon::Warning)->show();
+            return;
+        }
+        auto const level = *m_found;
+        bool const change = banned(level.id) != nullptr;
+        createQuickPopup(
+            change ? "Change the Ban?" : "Ban This Map?",
+            change ? fmt::format("Save the new reason for <cy>{}</c>?", plainAlertText(mapName(level.name, level.id)))
+                   : fmt::format("<cy>{}</c> (ID {}) will not come up in <cg>{}</c> Ranked matches until a staff "
+                                 "member puts it back.",
+                                 plainAlertText(mapName(level.name, level.id)), level.id, season2CupName(m_cup)),
+            "Cancel", change ? "Save" : "Ban",
+            [self = Weak<Season2MapBansPopup>(this), level, reason, change](auto*, bool yes) {
+                auto owner = self.lock();
+                if (!yes || !owner || owner->m_busy) return;
+                owner->m_busy = true;
+                owner->render();
+                Service::get().banStaffMap(
+                    owner->m_cup, level, reason, [self, change](std::optional<StaffMapBanList> list, std::string error) {
+                        auto owner = self.lock();
+                        if (!owner) return;
+                        if (list) {
+                            owner->m_found.reset();
+                            owner->m_lookupError.clear();
+                            owner->m_reason->setString("");
+                            owner->m_id->setString("");
+                            owner->m_page = 0;
+                        }
+                        owner->changed(std::move(list), std::move(error), change ? "Ban changed" : "Map banned");
+                    });
+            });
+    }
+    // 확인창을 거쳐 맵을 다시 이 컵의 랭크에 넣는다.
+    void onPutBack(CCObject* sender) {
+        int const index = sender->getTag();
+        if (!m_staff || m_busy || index < 0 || index >= static_cast<int>(m_maps.size())) return;
+        auto const map = m_maps[index];
+        createQuickPopup(
+            "Put Back in Ranked?",
+            fmt::format("<cy>{}</c> (ID {}) can come up in <cg>{}</c> Ranked matches again.",
+                        plainAlertText(mapName(map.name, map.levelId)), map.levelId, season2CupName(m_cup)),
+            "Keep Banned", "Put Back", [self = Weak<Season2MapBansPopup>(this), id = map.levelId](auto*, bool yes) {
+                auto owner = self.lock();
+                if (!yes || !owner || owner->m_busy) return;
+                owner->m_busy = true;
+                owner->render();
+                Service::get().unbanStaffMap(owner->m_cup, id,
+                                             [self](std::optional<StaffMapBanList> list, std::string error) {
+                                                 if (auto owner = self.lock())
+                                                     owner->changed(std::move(list), std::move(error), "Map put back");
+                                             });
+            });
+    }
+    // 밴 항목의 자세한 정보(스태프는 전체 사유와 밴한 스태프까지).
+    void onDetail(CCObject* sender) {
+        int const index = sender->getTag();
+        if (index < 0 || index >= static_cast<int>(m_maps.size())) return;
+        auto const& map = m_maps[index];
+        auto text = fmt::format("ID <cy>{}</c>{}\nBanned {}", map.levelId,
+                                map.creator.empty() ? "" : "  |  by " + plainAlertText(map.creator),
+                                localDateTime(map.at));
+        if (m_staff)
+            text += fmt::format(" by <cb>{}</c>\n\n{}",
+                                plainAlertText(map.byName.empty() ? std::string("Admin") : map.byName),
+                                plainAlertText(map.reason.empty() ? std::string("No reason") : map.reason));
+        FLAlertLayer::create(nullptr, mapName(map.name, map.levelId).c_str(), text.c_str(), "OK", nullptr, 380.f)
+            ->show();
+    }
+    void onPrevious(CCObject*) {
+        if (m_page > 0) {
+            --m_page;
+            render();
+        }
+    }
+    void onNext(CCObject*) {
+        ++m_page;
+        render();
+    }
+    void onRefresh(CCObject*) {
+        if (!m_busy) load();
+    }
+
+public:
+    static Season2MapBansPopup* create(std::string cup, std::function<void()> changed) {
+        auto* result = new Season2MapBansPopup;
+        if (result->init(std::move(cup), std::move(changed))) {
+            result->autorelease();
+            return result;
+        }
+        delete result;
+        return nullptr;
+    }
+};
+
 class Season2Layer final : public SceneLayer {
     // 컵 카드 하나에 속한 노드 모음 (face: 티어 이미지, status: 레이팅 또는 배치 진행 문구, online: 접속자 수 등).
     struct Card {
@@ -594,6 +951,7 @@ class Season2Layer final : public SceneLayer {
         CCLabelBMFont* online = nullptr;
         CCDrawNode* dot = nullptr;
         CCMenuItemSpriteExtra* play = nullptr;
+        CCMenuItemSpriteExtra* bans = nullptr;  // 1.0.8: 맵 밴 목록 (스태프 항상, 플레이어는 밴된 맵이 있을 때)
         CCLabelBMFont* rank = nullptr;
     };
     std::array<Card, 2> m_cards;
@@ -699,6 +1057,12 @@ class Season2Layer final : public SceneLayer {
             card.play->setTag(i);
             card.play->setID(fmt::format("season2-play-{}", card.cup));
             enabled(card.play, false);
+            // 1.0.8: PLAY 오른쪽 아래 구석의 돋보기 = 이 컵의 맵 밴 목록.
+            card.bans = iconButton(actions, this, menu_selector(Season2Layer::onMapBans), "gj_findBtnOff_001.png",
+                                   {cardW - kBansInset, 22.f}, kBansSize);
+            card.bans->setTag(i);
+            card.bans->setID(fmt::format("season2-map-bans-{}", card.cup));
+            card.bans->setVisible(Service::get().isAdmin());
         }
         auto* tools = menu(this);
         auto* testSprite = ButtonSprite::create("RESULT TEST", "goldFont.fnt", "GJ_button_05.png");
@@ -798,6 +1162,7 @@ class Season2Layer final : public SceneLayer {
     static constexpr float kCrownSink = .2f;
     static constexpr float kCrownDrop = 4.f;
     static constexpr float kCrownLower = .03f;
+    static constexpr float kBansSize = 28.f, kBansInset = 26.f;  // 1.0.8: 맵 밴 버튼 (카드 오른쪽 아래)
     // 접속자 수 표시 (-1이면 알 수 없음 -> 회색 점, 아니면 초록 점).
     static float onlineWidth(float cardW) { return std::max(30.f, cardW / 2.f - 32.f - 22.f - 4.f); }
     void showOnline(Card& card, int count) {
@@ -868,8 +1233,18 @@ class Season2Layer final : public SceneLayer {
             }
             showOnline(card, found->online);
             enabled(card.play, true);
+            card.bans->setVisible(Service::get().isAdmin() || found->mapBans > 0);
         }
         m_loaded = true;
+    }
+    // 1.0.8: 컵 카드의 돋보기 - 그 컵의 맵 밴 목록. 스태프가 바꾸면 카드 정보를 다시 받아 버튼 표시를 맞춘다.
+    void onMapBans(CCObject* sender) {
+        int const index = sender->getTag();
+        if (m_transitioning || m_resultTest || index < 0 || index > 1) return;
+        if (auto* popup = Season2MapBansPopup::create(m_cards[index].cup, [self = Weak<Season2Layer>(this)] {
+                if (auto owner = self.lock(); owner && !owner->m_transitioning) owner->refresh();
+            }))
+            popup->show();
     }
     // 디버그 전용: 가짜 결과 화면(Result Test)을 띄운다. 결과 화면이 떠 있는 동안에는 컵 선택과 뒤로 가기를 막는다.
     bool m_resultTest = false;
