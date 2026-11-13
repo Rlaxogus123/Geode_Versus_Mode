@@ -5,6 +5,8 @@
 ### Fixes
 - Minesweeper (and the other mini game windows): the window scales down on screens shorter or narrower than it, so the close button is no longer cut off at the top.
 - Anti-cheat: Echo (decks.echo), a replay bot with noclip and other cheats, counts as a cheat while it is loaded, like xdBot and Silicate.
+- Skip Music is now its own blue button instead of taking over the Ready / GET READY button while the map downloads, so pressing Ready (or the main Ranked button) no longer skips the music by accident. It sits away from those buttons (1v1 rooms: next to Downloading in the middle row; Group rooms: next to the download progress; Ranked Season 2: right of LDM on the match card) and can be pressed one second after it appears.
+- Lobby music: when GD's song limit deleted the song chosen as the Versus lobby music, the default music played until it was downloaded again by hand. Now the Ranked screen downloads it again by itself (while no match is running) and switches to it once it is back.
 
 ## v1.0.7 (in progress)
 

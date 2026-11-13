@@ -511,6 +511,21 @@ void enabled(CCMenuItemSpriteExtra* item, bool value) {
     item->setOpacity(value ? 255 : 95);
 }
 
+// 1.0.8: 따로 둔 음악 건너뛰기 버튼(파란 버튼). 준비/메인 버튼 자리에 두지 않으며, 보인 뒤 wait 초 동안은
+// 흐린 채 눌리지 않는다(그 뒤 armSkipMusic 이 켠다).
+CCMenuItemSpriteExtra* skipMusicButton(CCMenu* parent, CCObject* target, SEL_MenuHandler action, CCPoint position,
+                                       float scale, double wait) {
+    auto* item = button(parent, target, action, "Skip Music", position, scale, "GJ_button_02.png");
+    item->setID("skip-music-button"_spr);
+    enabled(item, wait <= 0.);
+    return item;
+}
+// 대기 시간이 끝난 건너뛰기 버튼을 켠다 (각 화면의 0.25초 갱신에서 부른다).
+void armSkipMusic(Weak<CCMenuItemSpriteExtra> const& weak, SkipMusicArm& arm, std::string const& key) {
+    auto item = weak.lock();
+    if (item && item->isVisible() && !item->isEnabled() && arm.wait(key) <= 0.) enabled(item, true);
+}
+
 // TextInput 배경을 UI 공통 파란색으로 맞춘다.
 void styleInput(TextInput* input) {
     input->getBGSprite()->setColor(ccc3(7, 31, 86));
@@ -4455,6 +4470,9 @@ class RoomLayer : public SceneLayer {
     bool m_renderQueued = false;
     uint64_t m_downloadGeneration = 0;
     int64_t m_mapID = 0;
+    // 1.0.8: 따로 둔 음악 건너뛰기 버튼과, 맵별로 보인 뒤 1초 대기
+    Weak<CCMenuItemSpriteExtra> m_skipMusic;
+    SkipMusicArm m_skipArm;
     std::string m_cacheError;
     std::string m_seenEmote;
     std::string m_signature;
@@ -4914,7 +4932,21 @@ class RoomLayer : public SceneLayer {
         // (readyControl). 받은 맵이면 눌러야 할 때 테두리가 깜박인다.
         auto const control =
             readyControl(room.started || drawingMap(room), m_pending, host, room.level.id > 0 || needsRandomDraw(room),
-                         m_cached || needsRandomDraw(room), m_downloading, myReady, mapAudioSkipped(room.level.id));
+                         m_cached || needsRandomDraw(room), m_downloading, myReady);
+        bool const skipShown = skipMusicShown(room.started || drawingMap(room), m_pending, room.level.id > 0, m_cached,
+                                              m_downloading, myReady, mapAudioSkipped(room.level.id));
+        auto const skipKey = std::to_string(room.level.id);
+        m_skipMusic = nullptr;
+        if (skipShown && room.mapPool) {
+            // 1.0.8: 맵 풀 방(가운데 줄이 없음)은 내 카드의 다운로드 막대 아래(상대 카드의 권한 버튼 자리와 같은 높이).
+            m_skipMusic = skipMusicButton(actions, this, menu_selector(RoomLayer::onSkipMusic),
+                                          {12.f + cardWidth / 2.f, cardBottom + 12.f}, .36f, m_skipArm.wait(skipKey));
+            if (auto skip = m_skipMusic.lock(); skip && skip->getContentSize().width > cardWidth - 10.f) {
+                auto* sprite = static_cast<ButtonSprite*>(skip->getNormalImage());
+                sprite->setScale(sprite->getScale() * (cardWidth - 10.f) / skip->getContentSize().width);
+                skip->updateSprite();
+            }
+        }
         if (!(room.mapPool && control.action == ReadyAction::ChooseMap)) {
             auto* ready =
                 button(actions, this, menu_selector(RoomLayer::onReady), control.caption,
@@ -4973,6 +5005,13 @@ class RoomLayer : public SceneLayer {
                                         m_downloading ? "Downloading..." : "Download", {}, .40f, "GJ_button_04.png");
                 enabled(download, !m_downloading && !room.started);
                 row.push_back({download, download->getContentSize().width, nullptr});
+                // 1.0.8: 음악 건너뛰기는 READY 버튼(왼쪽 카드 아래)에서 떨어진 이 줄에 따로 둔다.
+                if (skipShown) {
+                    auto* skip = skipMusicButton(actions, this, menu_selector(RoomLayer::onSkipMusic), {}, .40f,
+                                                 m_skipArm.wait(skipKey));
+                    m_skipMusic = skip;
+                    row.push_back({skip, skip->getContentSize().width, nullptr});
+                }
             }
             auto* gear =
                 iconButton(actions, this, menu_selector(RoomLayer::onRules), "GJ_optionsBtn_001.png", {}, 26.f);
@@ -5218,10 +5257,10 @@ class RoomLayer : public SceneLayer {
             return;
         m_cached = mapCached(room->level.id);
         bool const host = Service::get().isHost();
-        auto const control =
-            readyControl(room->started || drawingMap(*room), m_pending, host,
-                         room->level.id > 0 || needsRandomDraw(*room), m_cached || needsRandomDraw(*room),
-                         m_downloading, host ? room->hostReady : room->guestReady, mapAudioSkipped(room->level.id));
+        auto const control = readyControl(room->started || drawingMap(*room), m_pending, host,
+                                          room->level.id > 0 || needsRandomDraw(*room),
+                                          m_cached || needsRandomDraw(*room), m_downloading,
+                                          host ? room->hostReady : room->guestReady);
         if (control.action == ReadyAction::None) return;
         if (control.action == ReadyAction::ChooseMap) {
             if (room->mapPool)
@@ -5232,11 +5271,6 @@ class RoomLayer : public SceneLayer {
         }
         if (control.action == ReadyAction::Download) {
             beginDownload();
-            requestRender();
-            return;
-        }
-        if (control.action == ReadyAction::SkipMusic) {
-            m_readyAfterDownload = skipMapAudio(room->level.id);
             requestRender();
             return;
         }
@@ -5257,6 +5291,18 @@ class RoomLayer : public SceneLayer {
             } else
                 error(detail);
         });
+    }
+    // 1.0.8: 따로 둔 음악 건너뛰기 버튼. 보인 뒤 1초가 지나야 눌리고, 레벨 데이터를 받으면 바로 준비한다.
+    void onSkipMusic(CCObject*) {
+        auto const& room = Service::get().room();
+        if (m_pending || m_transitioning || !room || room->started || room->level.id <= 0) return;
+        bool const myReady = Service::get().isHost() ? room->hostReady : room->guestReady;
+        if (!skipMusicShown(drawingMap(*room), m_pending, true, mapCached(room->level.id), m_downloading, myReady,
+                            mapAudioSkipped(room->level.id)) ||
+            m_skipArm.wait(std::to_string(room->level.id)) > 0.)
+            return;
+        m_readyAfterDownload = skipMapAudio(room->level.id);
+        requestRender();
     }
     // 방 나가기 확인. 방장이 나가면 방이 모두에게 닫힌다는 것을 알린다.
     bool m_leaveAsked = false;
@@ -5313,7 +5359,10 @@ public:
         m_progressElapsed += dt;
         if (m_progressElapsed >= .25f) {
             m_progressElapsed = 0.f;
-            if (auto const& room = Service::get().room()) updateDownloads(*room);
+            if (auto const& room = Service::get().room()) {
+                updateDownloads(*room);
+                armSkipMusic(m_skipMusic, m_skipArm, std::to_string(room->level.id));
+            }
         }
         m_elapsed += dt;
         if (m_elapsed < firebase_config::ROOM_POLL_INTERVAL_SECONDS) return;
@@ -6378,6 +6427,7 @@ class RankedLayer final : public SceneLayer {
     CCLabelBMFont* m_downloadText[2] = {};
     CCDrawNode* m_downloadFill[2] = {};
     float m_downloadWidth = 0.f, m_progressTimer = 0.f;
+    float m_lobbySongTimer = 0.f;  // 1.0.8: 지워진 로비 음악 다시 받기 확인 주기(초)
     float m_downloadBarH = 6.f, m_downloadTextScale = .4f, m_downloadTextWidth = 0.f;
     CCNode* m_downloadRow = nullptr;
     CCMenuItemSpriteExtra* m_confirm = nullptr;
@@ -6516,6 +6566,9 @@ class RankedLayer final : public SceneLayer {
     std::string m_actionText;
     bool m_ldmSending = false;
     CCMenuItemToggler* m_ldmToggle = nullptr;
+    // 1.0.8: 매치 미리보기에 따로 둔 음악 건너뛰기 버튼과, 추첨별로 보인 뒤 1초 대기
+    Weak<CCMenuItemSpriteExtra> m_skipMusic;
+    SkipMusicArm m_skipArm;
     CCLabelBMFont* m_opponentLdm = nullptr;
     uint64_t m_stateRevision = 1;
     int m_ldmShown = -1;
@@ -7491,6 +7544,7 @@ class RankedLayer final : public SceneLayer {
     // 내 쪽은 로컬 진행도, 상대 쪽은 방(room)의 다운로드 정보를 쓴다. 준비 완료면 100%로
     // 표시한다.
     void updateDownloads() {
+        refreshSkipMusic();
         if (m_state && m_state->match && !m_lastResult && m_preview && m_preview->isVisible()) {
             refreshMapCard(*m_state->match);
             refreshBandCard(*m_state->match);
@@ -8007,8 +8061,8 @@ class RankedLayer final : public SceneLayer {
                                   .c_str()
                         : match.selectedMap ? fmt::format("{} / {}", match.selectedMap->name, progress.detail()).c_str()
                                             : "Selecting map...");
-                    bool const skip = canSkipMusic();
-                    setAction(skip ? "Skip Music" : "GET READY", skip);
+                    // 1.0.8: 메인 버튼은 GET READY(비활성) 그대로. 건너뛰기는 미리보기의 따로 둔 버튼이 맡는다.
+                    setAction("GET READY", false);
                 }
             } else {
                 m_status->setString("BATTLE READY");
@@ -8417,6 +8471,22 @@ class RankedLayer final : public SceneLayer {
         auto const& match = *m_state->match;
         return match.state == "preparing" && !match.ownReady && match.selectedMap && m_assetMatch == match.drawId &&
                !mapAudioSkipped(match.selectedMap->id);
+    }
+    // 1.0.8: 따로 둔 음악 건너뛰기 버튼을 보이거나 숨기고, 이 추첨에서 보인 지 1초가 지나면 켠다.
+    void refreshSkipMusic() {
+        auto skip = m_skipMusic.lock();
+        if (!skip) return;
+        bool const shown = canSkipMusic() && !m_lastResult;
+        if (skip->isVisible() != shown) skip->setVisible(shown);
+        if (!shown) return;
+        bool const armed = m_skipArm.wait(m_state->match->drawId) <= 0.;
+        if (skip->isEnabled() != armed) enabled(skip, armed);
+    }
+    void onSkipMusic(CCObject*) {
+        if (!canSkipMusic() || m_lastResult || m_skipArm.wait(m_state->match->drawId) > 0.) return;
+        skipMapAudio(m_state->match->selectedMap->id);
+        refreshSkipMusic();
+        render();
     }
     // 선택된 맵(과 음악)을 로컬에 받아 둔다. 룰렛 연출이 끝나기 전에는 시작하지 않는다.
     // 실패 시 맵 문제가 아니고 횟수/시간이 남았으면 2초 뒤 재시도하고,
@@ -8984,8 +9054,7 @@ class RankedLayer final : public SceneLayer {
     void onMatch(CCObject*) {
         if (m_pending || m_ackPending || !m_state || (m_lastResult && !m_resultAcknowledged)) return;
         if (m_state->match && m_state->match->state == "preparing") {
-            if (canSkipMusic()) skipMapAudio(m_state->match->selectedMap->id);
-            render();
+            render();  // 1.0.8: 메인 버튼은 음악을 건너뛰지 않는다(따로 둔 버튼 onSkipMusic)
             return;
         }
         if (season2DrawWaiting()) return;
@@ -10502,6 +10571,7 @@ class RankedLayer final : public SceneLayer {
     void onSeason2Profile(CCObject*) { showPlayer(Service::get().profile()); }
     // Season 2 매치 미리보기 레이아웃의 다운로드 영역 크기 상수.
     static constexpr float kS2DownloadW = 124.f, kS2DownloadY = 25.f, kS2DownloadPlateH = 15.f;
+    static constexpr float kS2SkipLeft = 84.f;  // 1.0.8: 음악 건너뛰기 버튼의 왼쪽 끝 (LDM 글자 오른쪽)
     // Season 2 매치 미리보기를 만든다: 양쪽 다운로드 상태, 맵 라이프/길이/2인 모드 표시,
     // 맵 카드와 밴드 카드, LDM 토글, 상대 프로필 버튼.
     void rebuildSeason2Preview(RankedMatch const& match) {
@@ -10600,6 +10670,20 @@ class RankedLayer final : public SceneLayer {
         m_ldmToggle->setPosition({42.f, rowY});
         actions->addChild(m_ldmToggle);
         label(m_preview, "LDM", {64.f, rowY}, .25f, 30.f, kIce);
+        // 1.0.8: 음악 건너뛰기는 메인 버튼(가운데 아래)과 떨어진 이 줄, LDM 오른쪽에 따로 둔다
+        // (refreshSkipMusic 이 보인다). 가운데의 라이프/길이 표시에 닿지 않게 좁은 화면에서는 줄인다.
+        {
+            auto* skip = skipMusicButton(actions, this, menu_selector(RankedLayer::onSkipMusic), {}, .34f, 1.);
+            float const room = std::max(30.f, center - 26.f - kS2SkipLeft);
+            if (skip->getContentSize().width > room) {
+                auto* sprite = static_cast<ButtonSprite*>(skip->getNormalImage());
+                sprite->setScale(sprite->getScale() * room / skip->getContentSize().width);
+                skip->updateSprite();
+            }
+            skip->setPosition({kS2SkipLeft + skip->getContentSize().width / 2.f, rowY});
+            skip->setVisible(false);
+            m_skipMusic = skip;
+        }
         auto* card = CCSprite::create();
         card->setContentSize(cardSize);
         auto* back = NineSlice::create("square02b_001.png");
@@ -10920,6 +11004,11 @@ public:
         if (m_progressTimer >= .25f) {
             m_progressTimer = 0.f;
             updateDownloads();
+        }
+        // 1.0.8: GD의 노래 수 한도로 지워진 로비 음악은 매치가 없을 때(맵 다운로드와 겹치지 않게) 다시 받는다.
+        if ((m_lobbySongTimer -= dt) <= 0.f) {
+            m_lobbySongTimer = 2.f;
+            if (!m_transitioning && m_state && !m_state->match && !m_lastResult) audio::refetchLobbySong();
         }
         showNoticeWhenReady();
         showDodgePenaltyWhenReady();

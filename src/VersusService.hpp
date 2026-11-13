@@ -815,6 +815,8 @@ struct ModLogEntry {
     bool permanent = false, lifted = false;
     int reports = 0, canceled = 0, refunded = 0, from = 0, to = 0;
     double amount = 0., before = 0., after = 0., removed = 0.;
+    int64_t levelId = 0;  // 1.0.8: 랭크 맵 밴 항목의 레벨 ID와 제작자
+    std::string creator;
 };
 struct StaffMember {
     std::string uid, name, addedBy, addedByName;
@@ -824,6 +826,11 @@ struct StaffMember {
 struct StaffCandidate {
     std::string uid, name, role;
     int accountId = 0;
+};
+// 1.0.8: 스태프가 랭크에서 뺀 맵 하나 (이름/제작자는 밴할 때 GD에서 찾은 값).
+struct StaffMapBan {
+    int64_t levelId = 0, at = 0;
+    std::string name, creator, reason, by, byName;
 };
 struct StaffMessage {
     int64_t id = 0, createdAt = 0, readAt = 0, repliedAt = 0;
@@ -1039,6 +1046,11 @@ public:
     void findStaffCandidates(std::string name, std::function<void(std::vector<StaffCandidate>, std::string)> callback);
     void addStaff(std::string uid, StaffCallback callback);
     void removeStaff(std::string uid, StaffCallback callback);
+    // 1.0.8: 랭크 맵 밴 목록(최대 개수 포함) / 밴 / 해제. 성공하면 서버가 돌려준 새 목록을 넘긴다.
+    using StaffMapBansCallback = std::function<void(std::vector<StaffMapBan>, int, std::string)>;
+    void fetchStaffMapBans(StaffMapBansCallback callback);
+    void banStaffMap(LevelInfo const& level, std::string reason, StaffMapBansCallback callback);
+    void unbanStaffMap(int64_t levelId, StaffMapBansCallback callback);
     using StaffMessagesCallback = std::function<void(std::vector<StaffMessage>, int, std::string)>;
     void fetchStaffMessages(StaffMessagesCallback callback);
     void sendStaffMessage(std::string kind, std::string body, StaffMessagesCallback callback);

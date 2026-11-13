@@ -372,4 +372,87 @@ void findRandomMapsWithoutRoom(MapSelection filter, std::function<bool()> alive,
     if (!alive) alive = [] { return true; };
     RandomSearch::get().begin(filter, {}, std::move(callback), std::move(alive));
 }
+
+namespace {
+// 1.0.8: 레벨 하나를 ID로 찾는 싱글턴. GD 레벨 델리게이트는 하나뿐이라 다른 검색이 쓰는 동안은 기다리고,
+// 응답이 12초(전체 20초) 안에 없으면 실패로 끝낸다. 끝나면 델리게이트를 바로 돌려준다.
+class LevelLookup final : public CCNode, public LevelManagerDelegate {
+    using Clock = std::chrono::steady_clock;
+    using Done = std::function<void(std::optional<LevelInfo>, std::string)>;
+    Done m_done;
+    int64_t m_id = 0;
+    std::string m_key;
+    Ref<GJSearchObject> m_search;
+    Clock::time_point m_began, m_asked;
+    bool m_pending = false;
+
+    bool owns(char const* key) const { return m_pending && key && m_key == key; }
+    void finish(std::optional<LevelInfo> level, std::string error) {
+        auto* manager = GameLevelManager::sharedState();
+        if (manager->m_levelManagerDelegate == this) manager->m_levelManagerDelegate = nullptr;
+        m_pending = false;
+        m_search = nullptr;
+        if (auto done = std::exchange(m_done, {})) done(std::move(level), std::move(error));
+    }
+
+public:
+    static LevelLookup& get() {
+        static auto* value = [] {
+            auto* node = new LevelLookup;
+            node->init();
+            CCDirector::sharedDirector()->getScheduler()->scheduleUpdateForTarget(node, 1, false);
+            node->release();
+            return node;
+        }();
+        return *value;
+    }
+    void begin(int64_t id, Done done) {
+        if (m_done) finish(std::nullopt, "Canceled.");
+        m_id = id;
+        m_done = std::move(done);
+        m_began = Clock::now();
+    }
+    void loadLevelsFinished(CCArray* levels, char const* key) override {
+        if (!owns(key)) return;
+        std::optional<LevelInfo> found;
+        if (levels)
+            for (auto* level : CCArrayExt<GJGameLevel*>(levels))
+                if (level && level->m_levelID.value() == m_id) found = describeLevel(level);
+        if (found)
+            finish(std::move(found), {});
+        else
+            finish(std::nullopt, "Not found on GD's servers.");
+    }
+    void loadLevelsFinished(CCArray* levels, char const* key, int) override { loadLevelsFinished(levels, key); }
+    void loadLevelsFailed(char const* key) override {
+        if (owns(key)) finish(std::nullopt, "Not found on GD's servers.");
+    }
+    void loadLevelsFailed(char const* key, int) override { loadLevelsFailed(key); }
+    void setupPageInfo(gd::string, char const*) override {}
+    void update(float) override {
+        if (!m_done) return;
+        auto const now = Clock::now();
+        if (m_pending ? now - m_asked > std::chrono::seconds(12) : now - m_began > std::chrono::seconds(20)) {
+            finish(std::nullopt, "GD's servers did not answer. Try again.");
+            return;
+        }
+        auto* manager = GameLevelManager::sharedState();
+        if (m_pending || manager->m_levelManagerDelegate) return;
+        m_search = GJSearchObject::create(SearchType::Search, gd::string(std::to_string(m_id)));
+        m_key = m_search->getKey();
+        if (manager->isDLActive(m_key.c_str())) return;
+        m_pending = true;
+        m_asked = now;
+        manager->m_levelManagerDelegate = this;
+        manager->getOnlineLevels(m_search);
+    }
+};
+}
+void lookupLevel(int64_t id, std::function<void(std::optional<LevelInfo>, std::string)> done) {
+    if (id <= 0) {
+        if (done) done(std::nullopt, "Invalid level ID.");
+        return;
+    }
+    LevelLookup::get().begin(id, std::move(done));
+}
 }

@@ -24,4 +24,7 @@ void findRandomMaps(MapSelection filter, RandomMapsCallback callback);
 void findRandomMaps(MapSelection filter, RandomMapExtras extras, RandomMapsCallback callback);
 // 방 없이 쓰는 검색. alive()가 false가 되면 검색을 중단한다.
 void findRandomMapsWithoutRoom(MapSelection filter, std::function<bool()> alive, RandomMapsCallback callback);
+// 1.0.8: GD 서버에서 레벨 하나를 ID로 찾는다(스태프 맵 밴 창). 못 찾으면 nullopt 와 이유를 넘긴다.
+// 한 번에 하나만 찾으며, 새로 부르면 앞의 요청은 "취소"로 끝난다.
+void lookupLevel(int64_t id, std::function<void(std::optional<LevelInfo>, std::string)> done);
 }

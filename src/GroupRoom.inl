@@ -855,6 +855,9 @@ class GroupRoomLayer : public SceneLayer {
     float m_progressElapsed = 0.f;
     CCLabelBMFont* m_downloadLabel = nullptr;
     std::string m_downloadKey;
+    // 1.0.8: 따로 둔 음악 건너뛰기 버튼과, 맵별로 보인 뒤 1초 대기
+    Weak<CCMenuItemSpriteExtra> m_skipMusic;
+    SkipMusicArm m_skipArm;
     bool m_pending = false, m_sendingEmote = false, m_renderQueued = false, m_leaveAsked = false;
     float m_emoteCooldown = 0.f, m_elapsed = 1.f;
     std::string m_signature, m_rowSignature;
@@ -1542,14 +1545,27 @@ class GroupRoomLayer : public SceneLayer {
                 label(m_dynamic, myReady ? "You will play" : "Get ready to play", {centerX, kBannerY - 5.f}, .4f,
                       sideWidth - 18.f, myReady ? ccc3(150, 255, 175) : ccWHITE, false, "chatFont.fnt");
         }
-        if (room.level.id > 0 && !m_cached && !running) {
-            m_downloadLabel =
-                label(m_dynamic, "", {centerX, counting ? kBannerY - 5.f : kBannerY}, .24f, sideWidth - 12.f, kIce);
-            updateDownload();
-        }
         bool const roll = groupNeedsRoll(room);
+        m_skipMusic = nullptr;
+        if (room.level.id > 0 && !m_cached && !running) {
+            float const downloadY = counting ? kBannerY - 5.f : kBannerY;
+            m_downloadLabel = label(m_dynamic, "", {centerX, downloadY}, .24f, sideWidth - 12.f, kIce);
+            updateDownload();
+            // 1.0.8: 음악 건너뛰기는 아래 Ready 버튼과 떨어진 이 줄(다운로드 진행 문구 오른쪽)에 따로 둔다.
+            if (skipMusicShown(seated || groupDrawing(room), m_pending, true, roll, m_downloading, myReady,
+                               mapAudioSkipped(room.level.id))) {
+                auto* skip = skipMusicButton(actions, this, menu_selector(GroupRoomLayer::onSkipMusic), {}, .34f,
+                                             m_skipArm.wait(std::to_string(room.level.id)));
+                fit(skip, sideWidth * .45f);
+                float const skipWidth = skip->getContentSize().width;
+                skip->setPosition({sideX + sideWidth - 6.f - skipWidth / 2.f, downloadY});
+                m_skipMusic = skip;
+                m_downloadLabel->setAnchorPoint({0.f, .5f});
+                m_downloadLabel->setPositionX(sideX + 8.f);
+            }
+        }
         auto const control = readyControl(seated || groupDrawing(room), m_pending, owner, room.level.id > 0 || roll,
-                                          m_cached || roll, m_downloading, myReady, mapAudioSkipped(room.level.id));
+                                          m_cached || roll, m_downloading, myReady);
         float barLeft = sideX + 6.f, barRight = sideX + sideWidth - 6.f;
         {
             auto* ldm = CCMenuItemToggler::createWithStandardSprites(this, menu_selector(GroupRoomLayer::onLdm), .4f);
@@ -1778,6 +1794,19 @@ class GroupRoomLayer : public SceneLayer {
         if (m_pending || !room || !host()) return;
         if (auto* popup = GroupRulesPopup::create(*room)) popup->show();
     }
+    // 1.0.8: 따로 둔 음악 건너뛰기 버튼. 보인 뒤 1초가 지나야 눌리고, 레벨 데이터를 받으면 바로 준비한다.
+    void onSkipMusic(CCObject*) {
+        auto const& room = Service::get().group();
+        if (m_pending || m_transitioning || !room || room->level.id <= 0) return;
+        auto const* mine = room->member(self());
+        if (!skipMusicShown(playingNow(*room) || groupDrawing(*room), m_pending, true,
+                            mapCached(room->level.id) || groupNeedsRoll(*room), m_downloading, mine && mine->ready,
+                            mapAudioSkipped(room->level.id)) ||
+            m_skipArm.wait(std::to_string(room->level.id)) > 0.)
+            return;
+        m_readyAfterDownload = skipMapAudio(room->level.id);
+        requestRender();
+    }
     // Ready 버튼. readyControl이 정한 동작(맵 선택, 다운로드, 준비, 준비 해제)을 수행한다.
     // 준비는 부정행위 감지로 막혀 있으면 보내지 않는다.
     void onReady(CCObject*) {
@@ -1788,7 +1817,7 @@ class GroupRoomLayer : public SceneLayer {
         bool const roll = groupNeedsRoll(*room);
         auto const control =
             readyControl(playingNow(*room) || groupDrawing(*room), m_pending, host(), room->level.id > 0 || roll,
-                         m_cached || roll, m_downloading, mine && mine->ready, mapAudioSkipped(room->level.id));
+                         m_cached || roll, m_downloading, mine && mine->ready);
         if (control.action == ReadyAction::None) return;
         if (control.action == ReadyAction::ChooseMap) {
             if (room->mapPool) {
@@ -1800,11 +1829,6 @@ class GroupRoomLayer : public SceneLayer {
         }
         if (control.action == ReadyAction::Download) {
             beginDownload();
-            requestRender();
-            return;
-        }
-        if (control.action == ReadyAction::SkipMusic) {
-            m_readyAfterDownload = skipMapAudio(room->level.id);
             requestRender();
             return;
         }
@@ -1944,6 +1968,7 @@ public:
         if (m_progressElapsed >= .25f) {
             m_progressElapsed = 0.f;
             updateDownload();
+            armSkipMusic(m_skipMusic, m_skipArm, std::to_string(m_mapID));
         }
         updateCountdown();
         m_elapsed += dt;

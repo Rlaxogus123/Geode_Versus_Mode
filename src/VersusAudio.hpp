@@ -49,6 +49,9 @@ void setRankedMusicVolume(float volume);
 // 사용자가 고른 Ranked 음악의 Newgrounds 노래 ID (0이면 기본 음악).
 int rankedMusicSong();
 void setRankedMusicSong(int songID);
+// 1.0.8: 고른 로비 음악이 기기에서 지워졌으면(GD의 노래 수 한도) 다시 받는다. 다 받으면 대신 나오던 음악을
+// 그 곡으로 바꾼다. 맵 다운로드와 겹치지 않게 매치가 없을 때 주기적으로 부른다.
+void refetchLobbySong();
 // 컵(시즌)이 지정한 노래 ID. 사용자 설정보다 우선한다.
 void setCupSong(int songID);
 int cupSong();

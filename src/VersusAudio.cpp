@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <random>
@@ -37,6 +38,11 @@ std::string s_levelSong;
 std::string s_watched;
 bool s_heard = false;
 int s_quietChecks = 0;
+// 1.0.8: 지워진 로비 음악 다시 받기 상태 (곡 ID, 시도 횟수, 다음 시도 시각, 음악 라이브러리 주소 요청 여부).
+int s_refetchSong = 0;
+int s_refetchTries = 0;
+std::chrono::steady_clock::time_point s_refetchNext{};
+bool s_refetchAskedURL = false;
 
 // 감시 중이던 맵 노래 상태를 초기화한다.
 void forgetWatched() {
@@ -350,6 +356,50 @@ void setRankedMusicSong(int songID) {
         s_rankedMusicPath.clear();
         startRankedMusic();
     }
+}
+
+// 1.0.8: GD는 받은 노래 수가 한도에 차면 새 노래를 받을 때마다 예전 노래를 하나씩 지운다. 로비 음악으로 고른 곡도
+// 지워지면 기본 음악이 나오던 문제: 다시 받는다(한 곡에 3번까지, 30초 간격). 다 받았으면, 그사이 대신 나오던
+// 우리 음악(컵 노래/기본 곡)을 그 곡으로 바꾼다(맵 노래가 나오는 중이면 그대로 두고, 끝나면 startRankedMusic 이 고른다).
+void refetchLobbySong() {
+    int const song = rankedMusicSong();
+    auto* music = MusicDownloadManager::sharedState();
+    if (song <= 0 || !music) return;
+    if (song != s_refetchSong) {
+        s_refetchSong = song;
+        s_refetchTries = 0;
+        s_refetchNext = {};
+    }
+    if (music->isSongDownloaded(song)) {
+        if (s_refetchTries == 0) return;
+        s_refetchTries = 0;
+        log::info("Versus: the lobby music {} is downloaded again", song);
+        auto const path = songPath(song);
+        if (auto* engine = FMODAudioEngine::sharedEngine();
+            ownsRankedMusic(engine) && !path.empty() && path != s_rankedMusicPath) {
+            s_rankedMusicPlaying = false;
+            s_rankedMusicPath.clear();
+            startRankedMusic();
+        }
+        return;
+    }
+    if (music->isRunningActionForSongID(song)) return;
+    auto const now = std::chrono::steady_clock::now();
+    if (s_refetchTries >= 3 || now < s_refetchNext) return;
+    if (song >= 10'000'000 && music->m_customContentURL.empty()) {  // 음악 라이브러리 곡: 라이브러리 주소부터
+        if (!s_refetchAskedURL) {
+            s_refetchAskedURL = true;
+            music->getCustomContentURL();
+        }
+        return;
+    }
+    ++s_refetchTries;
+    s_refetchNext = now + std::chrono::seconds(30);
+    log::info("Versus: the lobby music {} is not on this device any more (GD's song limit?) - downloading it again "
+              "(try {})",
+              song, s_refetchTries);
+    if (song < 10'000'000) music->getSongInfo(song, true);
+    music->downloadSong(song);
 }
 
 // 컵이 지정한 노래 ID. 바뀌면 지금 우리 음악이 나오는 중일 때 새 노래로 다시 시작한다.

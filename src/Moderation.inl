@@ -1504,7 +1504,7 @@ public:
 };
 
 // 관리자 메인 화면(Moderation). 탭: Reports(미처리 신고), Bans, R.Bans(신고 금지), Cases(처리된 신고), Mod Log.
-// Bans 계열 탭은 이름/UID/GD 계정 ID 로 검색할 수 있다. 상단 버튼으로 Staff(제작자 계정 전용), Mail, Appeals, Rules 를
+// Bans 계열 탭은 이름/UID/GD 계정 ID 로 검색할 수 있다. 상단 버튼으로 Staff(제작자 계정 전용), Mail, Appeals, Maps(랭크 맵 밴), Rules 를
 // 열고, 하단에서 Dodges, Broadcast(제작자 계정 전용)를 연다. 제작자 계정이 아닌 스태프가 열면 규칙 안내가 자동으로 뜬다.
 class AdminPanelPopup final : public ::versus::DeferredPopup {
     static constexpr int kPage = 5;
@@ -1609,6 +1609,10 @@ class AdminPanelPopup final : public ::versus::DeferredPopup {
         m_appeals = button(m_buttonMenu, this, menu_selector(AdminPanelPopup::onAppeals), "Appeals", {46.f, 268.f},
                            .36f, "GJ_button_04.png");
         m_appeals->setID("admin-appeals-button"_spr);
+        // 1.0.8: 랭크에 나오지 않게 뺀 맵 목록 (스태프 전원)
+        button(m_buttonMenu, this, menu_selector(AdminPanelPopup::onMaps), "Maps", {110.f, 268.f}, .36f,
+               "GJ_button_02.png")
+            ->setID("admin-map-bans-button"_spr);
         Service::get().fetchAdminStatus([self = Weak<AdminPanelPopup>(this)](AdminStatus status, std::string) {
             if (auto owner = self.lock()) owner->appealsWaiting(status.appeals);
         });
@@ -1705,6 +1709,9 @@ class AdminPanelPopup final : public ::versus::DeferredPopup {
     void onStaff(CCObject*) {
         if (auto* popup = StaffPopup::create()) popup->show();
     }
+    void onMaps(CCObject*) {
+        if (auto* popup = StaffMapsPopup::create()) popup->show();
+    }
     void onMail(CCObject*) {
         if (auto* popup = StaffMessagesPopup::create(Service::get().isOwner(), [self = Weak<AdminPanelPopup>(this)] {
                 if (auto owner = self.lock()) {
@@ -1793,7 +1800,7 @@ class AdminPanelPopup final : public ::versus::DeferredPopup {
                 float x = who->getPositionX() + who->getScaledContentSize().width + 5.f;
                 auto* verb = label(cell, modLogVerb(entry), {x, 20.f}, .4f, 160.f, kMuted, true, "chatFont.fnt");
                 x += verb->getScaledContentSize().width + 5.f;
-                if (!entry.target.empty())
+                if (!entry.target.empty() || entry.levelId > 0)
                     label(cell, entry.targetName.empty() ? std::string("Player") : entry.targetName, {x, 20.f}, .32f,
                           std::max(20.f, 330.f - x), ccWHITE, true);
                 rightLabel(cell, agoText(now - entry.at), {400.f, 20.f}, .36f, 70.f, kMuted);
