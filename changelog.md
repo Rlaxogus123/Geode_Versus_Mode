@@ -9,6 +9,7 @@
 - Result screens show each player's user coins (the battle result, its MATCH RESULT card and the match record). When both cleared (or reached the same %) with the same number of failed runs and the coins decided it, the winner's coins grow and glow and the reason says so ("More coins: 1 vs 0").
 - Lobby music: when GD's song limit deleted the song chosen as the Versus lobby music, the default music played until it was downloaded again by hand. Now the Ranked screen downloads it again by itself (while no match is running) and switches to it once it is back.
 - Battles that start without music (the song could not be downloaded, Skip Music was pressed, or Always Download Song is off) now say so: the loading screen shows a red NO MUSIC box with the reason, the same box shows for a few seconds when the level starts, and the Ranked match card and room download captions read NO MUSIC / Ready - no music in red instead of a plain 100%.
+- Ranked (Season 2): the match card has three parts - your rating band on the left, the map in the middle (wider, centred: ID / version / upload line on top, name, creator, stars, likes and map ratings), and the map's song on the right: its name, artist, ID and size, and whether it is downloaded (READY / % / NO MUSIC / SKIPPED). With Jukebox installed the disc on the song card opens Jukebox's list for that song, so you can pick and download another version (NONG) yourself when the song can't be downloaded; once it is downloaded the match uses it.
 
 ## v1.0.7 (in progress)
 

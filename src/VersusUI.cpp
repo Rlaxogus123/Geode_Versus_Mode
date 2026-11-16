@@ -57,6 +57,8 @@
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/MusicDownloadManager.hpp>
 #include <Geode/binding/SongInfoObject.hpp>
+#include <Geode/binding/CustomSongWidget.hpp>
+#include <Geode/binding/LevelTools.hpp>
 #include <Geode/binding/GJDifficultySprite.hpp>
 #include <Geode/binding/SimplePlayer.hpp>
 #include <Geode/binding/ProfilePage.hpp>
@@ -7229,8 +7231,10 @@ class RankedLayer final : public SceneLayer {
         m_cardDetails.clear();
         auto const size = m_preview->getContentSize();
         float const width = cardWidths(size.width).second, height = kCardHeight;
-        auto* card = infoCard(m_preview, "ranked-map-card"_spr, {size.width - 6.f - width / 2.f, size.height - 1.f},
-                              width, height, match.selectedMap ? ccc3(255, 205, 110) : kIce,
+        // 1.0.8: Season 2는 가운데 칸
+        float const cardX = m_season2 ? size.width / 2.f : size.width - 6.f - width / 2.f;
+        auto* card = infoCard(m_preview, "ranked-map-card"_spr, {cardX, size.height - 1.f}, width, height,
+                              match.selectedMap ? ccc3(255, 205, 110) : kIce,
                               m_season2 ? season2Plate(.78f) : ccc3(9, 15, 30), m_season2);
         m_mapCard = card;
         if (!match.selectedMap) {
@@ -7241,11 +7245,13 @@ class RankedLayer final : public SceneLayer {
             return;
         }
         auto const& level = *match.selectedMap;
+        CCNode* faceNode = nullptr;
         if (auto* face = mapDifficulty(level)) {
             auto const faceSize = face->getContentSize();
             face->setScale(std::min(28.f / std::max(1.f, faceSize.height), 28.f / std::max(1.f, faceSize.width)));
             face->setPosition({21.f, height / 2.f + 1.f});
             card->addChild(face);
+            faceNode = face;
         }
         float const left = 41.f, textWidth = width - left - 7.f, textX = left + textWidth / 2.f;
         auto* date =
@@ -7259,31 +7265,50 @@ class RankedLayer final : public SceneLayer {
         float const row = 8.f;
         m_cardLikesCenter = -1.f;
         if (m_season2) {
-            constexpr float kRowBottom = 3.f, kRight = 9.f, kLikesW = 46.f, kSlack = 12.f;
+            // 1.0.8: 가운데 칸 - 얼굴과 글줄 묶음을 칸 가운데에 둔다. 맨 위 ID·버전·업로드 줄(작게, 칸 가운데),
+            // 맵 이름, 제작자, 별·코인·좋아요·평가 배지 한 줄.
+            constexpr float kRowBottom = 3.f, kLikesW = 46.f, kGap = 6.f, kFace = 28.f, kFaceGap = 6.f;
             constexpr float kBadgeH = 8.f * 1.3f * 1.2f, kCompactH = 7.f * 1.3f * 1.2f;
+            float const column = std::max(40.f, width - kFace - kFaceGap - 14.f);
+            float const colCenter = width / 2.f + (kFace + kFaceGap) / 2.f;
+            auto* title = typeinfo_cast<CCLabelBMFont*>(card->getChildByID("ranked-map-title"_spr));
+            if (title) {
+                title->setAnchorPoint({.5f, .5f});
+                title->setScale(.28f);
+                title->limitLabelWidth(column, .28f, .1f);
+                title->setPosition({colCenter, height - 16.f});
+            }
+            auto* by = label(card, "by " + (level.creator.empty() ? std::string("Unknown") : level.creator),
+                             {colCenter, height - 24.5f}, .24f, column, ccc3(255, 214, 120), false, "goldFont.fnt");
             auto* stars = starRating(card, std::to_string(level.stars), {0.f, row}, .3f, 40.f);
-            float const starsW = stars->getScaledContentSize().width;
-            stars->setPositionX(left + starsW / 2.f);
-            mapvotes::sitOn(stars, kRowBottom);
-            float starsEnd = left + starsW;
-            if (coins) {
-                mapCoinCount(card, level, {starsEnd + 18.f, row}, .27f);
-                mapvotes::sitOn(card->getChildByID("map-user-coin-count"_spr), kRowBottom);
-                starsEnd += 34.f;
-            }
-            auto* badge = mapVotesBadge(card, level.id, {width - kRight, row}, kBadgeH, 1.f, 2);
-            float zoneLeft = width - kRight - (badge ? badge->reserve() : 0.f) - 4.f;
-            float likesCenter = std::max((starsEnd + zoneLeft) / 2.f, starsEnd + 6.f + kLikesW / 2.f);
-            if (badge && likesCenter + kLikesW / 2.f > zoneLeft + kSlack) {
+            float const starsW = stars->getScaledContentSize().width, coinsW = coins ? 34.f : 0.f;
+            auto* badge = mapVotesBadge(card, level.id, {0.f, row}, kBadgeH, 0.f, 2);
+            auto rowWidth = [&] { return starsW + coinsW + kGap + kLikesW + (badge ? kGap + badge->reserve() : 0.f); };
+            if (badge && rowWidth() > column) {
                 badge->removeFromParent();
-                badge = mapVotesBadge(card, level.id, {width - kRight, row}, kCompactH, 1.f, 2, true);
-                zoneLeft = width - kRight - (badge ? badge->reserve() : 0.f) - 4.f;
-                likesCenter = std::max((starsEnd + zoneLeft) / 2.f, starsEnd + 6.f + kLikesW / 2.f);
+                badge = mapVotesBadge(card, level.id, {0.f, row}, kCompactH, 0.f, 2, true);
             }
-            if (badge) mapvotes::sitOn(badge, kRowBottom);
-            label(card, "by " + (level.creator.empty() ? std::string("Unknown") : level.creator),
-                  {left, height - 23.5f}, .26f, std::max(40.f, zoneLeft - left), ccc3(255, 214, 120), true,
-                  "goldFont.fnt");
+            float const rowW = rowWidth(), rowStart = colCenter - rowW / 2.f;
+            stars->setPositionX(rowStart + starsW / 2.f);
+            mapvotes::sitOn(stars, kRowBottom);
+            if (coins) {
+                mapCoinCount(card, level, {rowStart + starsW + 18.f, row}, .27f);
+                mapvotes::sitOn(card->getChildByID("map-user-coin-count"_spr), kRowBottom);
+            }
+            float const likesCenter = rowStart + starsW + coinsW + kGap + kLikesW / 2.f;
+            if (badge) {
+                badge->setPositionX(rowStart + rowW - badge->reserve());
+                mapvotes::sitOn(badge, kRowBottom);
+            }
+            // 얼굴은 글줄 묶음(가장 넓은 줄)의 바로 왼쪽
+            float const widest = std::min(column, std::max({title ? title->getScaledContentSize().width : 0.f,
+                                                            by->getScaledContentSize().width, rowW}));
+            if (faceNode)
+                faceNode->setPosition({std::max(4.f + kFace / 2.f, colCenter - widest / 2.f - kFaceGap - kFace / 2.f),
+                                       height / 2.f - 2.f});
+            // (패널 왕관의 아래 끝이 칸 윗변에 2pt쯤 걸치므로 맨 윗줄은 7pt 아래)
+            date->setAnchorPoint({.5f, .5f});
+            date->setPosition({width / 2.f, height - 7.f});
             m_cardLikesCenter = likesCenter;
             m_cardRowBottom = kRowBottom;
             m_cardLikesAt = CCPoint{m_cardLikesCenter, row};
@@ -7308,12 +7333,18 @@ class RankedLayer final : public SceneLayer {
     CCPoint m_cardLikesAt;
     float m_cardLikesCenter = -1.f;
     float m_cardRowBottom = 0.f;
-    // 밴드 카드와 맵 카드의 너비(first, second)를 계산한다. Season 2는 맵 카드를 더 넓게
-    // 둔다.
+    // 밴드 카드와 맵 카드의 너비(first, second)를 계산한다.
+    // 1.0.8: Season 2는 세 칸 - 왼쪽 밴드, 가운데 맵(가장 넓음), 오른쪽 노래(밴드와 같은 폭, songCardWidth).
+    static constexpr float kS2CardGap = 6.f, kS2SideShare = .29f;
     std::pair<float, float> cardWidths(float row) const {
+        if (m_season2) {
+            float const room = row - kS2CardGap * 4.f, side = room * kS2SideShare;
+            return {side, room - side * 2.f};
+        }
         float const both = row - 18.f;
-        return m_season2 ? std::pair{both / 4.f * 1.4f, both - both / 4.f * 1.4f} : std::pair{both / 2.f, both / 2.f};
+        return {both / 2.f, both / 2.f};
     }
+    float songCardWidth(float row) const { return cardWidths(row).first; }
     float cardDateScale() const { return m_season2 ? .28f * 1.2f : .28f; }
     // 숫자를 1.2K / 12K / 1.5M 식으로 줄여 표시한다.
     static std::string compactCount(int value) {
@@ -7378,7 +7409,201 @@ class RankedLayer final : public SceneLayer {
             likes->setPositionX(start + iconW + 3.f);
         }
         date->setString(dateText.c_str());
-        date->limitLabelWidth(m_mapCard->getContentSize().width - 48.f, cardDateScale(), .15f);
+        date->limitLabelWidth(m_mapCard->getContentSize().width - (m_season2 ? 14.f : 48.f), cardDateScale(), .15f);
+    }
+    // 1.0.8: Season 2 매치 카드의 오른쪽 칸 - 맵의 노래(이름, 작곡가, ID, 크기)와 받기 상태.
+    // Jukebox(fleym.nongd)가 켜져 있으면 왼쪽 원판이 그 NONG 목록을 여는 버튼이 된다: 노래를 못 받는 맵이어도
+    // 플레이어가 다른 음원(NONG)을 골라 받을 수 있다. Jukebox에는 다른 모드가 부를 수 있는 기능이 없어서, GD의
+    // 노래 위젯(CustomSongWidget)을 보이지 않게 만들어 Jukebox가 그 위젯에 붙이는 버튼(nong-button)을 대신 누른다
+    // (GD 레벨 화면에서 그 버튼을 누르는 것과 같음). 받은 NONG은 GD가 받은 노래로 치므로(Jukebox의 pathForSong)
+    // 다운로드 칸과 이 칸이 바로 READY가 된다.
+    static constexpr char const* kJukeboxID = "fleym.nongd";
+    struct MapSong {
+        int id = 0;              // 커스텀 노래 ID (0: GD 공식 노래)
+        bool official = false;
+        int more = 0;            // 이 맵이 쓰는 다른 노래 수
+        std::string name, artist;
+        float sizeMB = 0.f;
+    };
+    // 캐시된 레벨에서 대표 노래를 찾는다. 노래 정보(이름 등)는 GD가 받아 둔 만큼만.
+    static std::optional<MapSong> mapSong(int64_t levelID) {
+        auto* level = cachedLevel(levelID);
+        if (!level) return std::nullopt;
+        MapSong song;
+        song.id = level->m_songID;
+        if (song.id <= 0) {
+            song.official = true;
+            song.id = 0;
+            int const track = level->m_audioTrack;
+            song.name = std::string(LevelTools::getAudioTitle(track));
+            song.artist = std::string(LevelTools::nameForArtist(LevelTools::artistForAudio(track)));
+        } else {
+            auto* music = MusicDownloadManager::sharedState();
+            SongInfoObject* info = song.id >= 10'000'000 ? music->getMusicObject(song.id) : nullptr;
+            if (!info) info = music->getSongInfoObject(song.id);
+            if (info) {
+                song.name = std::string(info->m_songName);
+                song.artist = std::string(info->m_artistName);
+                song.sizeMB = info->m_fileSize;
+            }
+        }
+        std::set<int> others;
+        std::string const list(level->m_songIDs);
+        for (size_t at = 0; at < list.size();) {
+            size_t const end = std::min(list.find(',', at), list.size());
+            int value = 0;
+            auto const parsed = std::from_chars(list.data() + at, list.data() + end, value);
+            if (parsed.ec == std::errc() && value > 0 && value != song.id) others.insert(value);
+            at = end + 1;
+        }
+        song.more = static_cast<int>(others.size());
+        return song;
+    }
+    // 노래 칸의 상태 글자와 색.
+    std::pair<std::string, ccColor3B> songStatus(RankedMatch const& match, MapSong const& song) const {
+        ccColor3B const ready = ccc3(135, 255, 175);
+        if (song.official) return {"READY", ready};
+        auto* music = MusicDownloadManager::sharedState();
+        if (music->isSongDownloaded(song.id)) return {"READY", ready};
+        if (m_assetsReady && m_assetMatch == match.drawId) {
+            switch (mapSilence(match.selectedMap->id)) {
+            case MapSilence::Skipped: return {"SKIPPED", ccc3(255, 190, 110)};
+            case MapSilence::Setting: return {"MUSIC OFF", ccc3(255, 190, 110)};
+            default: return {"NO MUSIC", kNoMusicColor};
+            }
+        }
+        int const percent = music->getDownloadProgress(song.id);
+        if (percent > 0) return {fmt::format("{}%", std::clamp(percent, 0, 99)), kIce};
+        return {"WAITING", kMuted};
+    }
+    // 줄 하나를 폭에 맞춘다: minScale까지 줄이고, 그래도 넘치면 뒤를 잘라 "..."을 붙인다(긴 노래 이름).
+    static void fitLine(CCLabelBMFont* line, float maxWidth, float scale, float minScale) {
+        if (!line || maxWidth <= 0.f) return;
+        line->setScale(scale);
+        float const full = line->getContentSize().width;
+        if (full * scale <= maxWidth) return;
+        line->setScale(std::max(minScale, maxWidth / std::max(1.f, full)));
+        std::string text = line->getString();
+        while (text.size() > 1 && line->getContentSize().width * line->getScale() > maxWidth) {
+            text.pop_back();
+            while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80) text.pop_back();
+            while (!text.empty() && text.back() == ' ') text.pop_back();
+            line->setString((text + "...").c_str());
+        }
+    }
+    Weak<CCNode> m_songCard;
+    std::string m_songCardKey;
+    int m_songCardSong = 0;
+    geode::Ref<CustomSongWidget> m_jukeboxWidget;
+    int m_jukeboxWidgetSong = 0;
+    // 노래 칸을 만들거나 상태만 고친다. 맵·노래 정보가 바뀌면 다시 만든다.
+    void refreshSongCard(RankedMatch const& match) {
+        if (!m_preview || m_lastResult || !m_season2) return;
+        auto const size = m_preview->getContentSize();
+        float const width = songCardWidth(size.width), height = kCardHeight;
+        std::optional<MapSong> song = match.selectedMap ? mapSong(match.selectedMap->id) : std::nullopt;
+        bool const jukebox = song && !song->official && song->id > 0 && Loader::get()->isModLoaded(kJukeboxID);
+        std::string const key =
+            !match.selectedMap ? std::string("none")
+            : !song            ? fmt::format("{}|map", match.selectedMap->id)
+                               : fmt::format("{}|{}|{}|{}|{:.2f}|{}|{}", match.selectedMap->id, song->id, song->name,
+                                             song->artist, song->sizeMB, song->more, jukebox);
+        auto card = m_songCard.lock();
+        if (!card || card->getParent() != m_preview || key != m_songCardKey) {
+            if (card) card->removeFromParent();
+            m_songCardKey = key;
+            m_songCardSong = song && !song->official ? song->id : 0;
+            auto* fresh = infoCard(m_preview, "ranked-song-card"_spr, {size.width - 6.f - width / 2.f, size.height - 1.f},
+                                   width, height, kIce, season2Plate(.78f), true);
+            m_songCard = fresh;
+            card = fresh;
+            float const left = 36.f, textW = std::max(30.f, width - left - 6.f);
+            // 왼쪽 원판: Jukebox가 있으면 그 목록을 여는 버튼(Jukebox의 원판 그림), 없으면 음악 표시만.
+            CCSprite* disc = nullptr;
+            if (jukebox) {
+                if (auto* frame = cachedFrame("fleym.nongd/JB_PinDisc.png")) disc = CCSprite::createWithSpriteFrame(frame);
+            }
+            if (!disc) disc = loadedFrameSprite("GJ_musicOnBtn_001.png", "GJ_GameSheet03.plist");
+            if (disc) {
+                disc->setScale(22.f / std::max(1.f, disc->getContentSize().height));
+                if (jukebox) {
+                    auto* holder = CCMenu::create();
+                    holder->setPosition({0.f, 0.f});
+                    card->addChild(holder, 2);
+                    auto* button =
+                        CCMenuItemSpriteExtra::create(disc, this, menu_selector(RankedLayer::onSongJukebox));
+                    button->setID("ranked-song-jukebox"_spr);
+                    button->setPosition({18.f, height / 2.f + 4.f});
+                    holder->addChild(button);
+                    label(card, "Jukebox", {18.f, 5.f}, .2f, 30.f, ccc3(255, 214, 120), false, "goldFont.fnt");
+                } else {
+                    disc->setPosition({18.f, height / 2.f});
+                    card->addChild(disc);
+                }
+            }
+            if (!match.selectedMap) {
+                label(card, "SONG", {left, height / 2.f + 1.f}, .3f, textW, kMuted, true, "bigFont.fnt");
+                return;
+            }
+            if (!song) {
+                label(card, "Loading map...", {left, height / 2.f + 1.f}, .45f, textW, kMuted, true, "chatFont.fnt");
+                return;
+            }
+            std::string const name = !song->name.empty() ? song->name
+                                     : song->official    ? std::string("Official song")
+                                                         : fmt::format("Song {}", song->id);
+            auto* title = label(card, name, {left, height - 11.f}, .28f, 0.f, ccWHITE, true, "bigFont.fnt");
+            title->setID("ranked-song-name"_spr);
+            fitLine(title, textW, .28f, .19f);
+            fitLine(label(card, "by " + (song->artist.empty() ? std::string("Unknown") : song->artist),
+                          {left, height - 21.f}, .24f, 0.f, ccc3(255, 214, 120), true, "goldFont.fnt"),
+                    textW, .24f, .17f);
+            std::string info = song->official ? std::string("GD song") : fmt::format("ID {}", song->id);
+            if (!song->official && song->sizeMB > 0.f) info += fmt::format("  {:.1f}MB", song->sizeMB);
+            if (song->more > 0) info += fmt::format("  +{}", song->more);
+            label(card, info, {left, 8.f}, .3f, textW * .55f, kMuted, true, "chatFont.fnt")->setID("ranked-song-info"_spr);
+            auto* state = label(card, "", {width - 6.f, 8.f}, .24f, textW * .45f, kIce, false, "bigFont.fnt");
+            state->setAnchorPoint({1.f, .5f});
+            state->setID("ranked-song-state"_spr);
+        }
+        if (!song) return;
+        if (auto* state = typeinfo_cast<CCLabelBMFont*>(card->getChildByID("ranked-song-state"_spr))) {
+            auto const [text, color] = songStatus(match, *song);
+            if (text != state->getString()) {
+                state->setString(text.c_str());
+                state->setScale(.24f);
+                state->limitLabelWidth((width - 42.f) * .45f, .24f, .12f);
+            }
+            state->setColor(color);
+        }
+    }
+    // Jukebox 원판: 보이지 않는 GD 노래 위젯에 Jukebox가 붙인 버튼을 누른다(그 노래의 NONG 목록이 열린다).
+    void onSongJukebox(CCObject*) {
+        auto card = m_songCard.lock();
+        int const id = m_songCardSong;
+        if (!card || id <= 0 || !Loader::get()->isModLoaded(kJukeboxID)) return;
+        if (!m_jukeboxWidget || m_jukeboxWidgetSong != id || m_jukeboxWidget->getParent() != card.data()) {
+            if (m_jukeboxWidget) m_jukeboxWidget->removeFromParent();
+            auto* music = MusicDownloadManager::sharedState();
+            bool const library = id >= 10'000'000;
+            SongInfoObject* info = library ? music->getMusicObject(id) : nullptr;
+            if (!info) info = music->getSongInfoObject(id);
+            if (!info) info = SongInfoObject::create(id);
+            auto* widget = info ? CustomSongWidget::create(info, nullptr, false, false, false, false, false, library, 0)
+                                : nullptr;
+            if (!widget) return;
+            widget->setVisible(false);
+            card->addChild(widget, -5);
+            m_jukeboxWidget = widget;
+            m_jukeboxWidgetSong = id;
+        }
+        if (auto* opener = typeinfo_cast<CCMenuItemSpriteExtra*>(
+                m_jukeboxWidget->getChildByIDRecursive(std::string(kJukeboxID) + "/nong-button"))) {
+            opener->activate();
+            return;
+        }
+        Notification::create("Jukebox can't open this song yet. Try again in a moment.", NotificationIcon::Warning)
+            ->show();
     }
     // 티어 밴드가 바뀌면 현재 색(전환 중이면 중간색)에서 새 테마로 전환을 시작하고 밴드
     // 카드를 살짝 튕긴다.
@@ -7580,6 +7805,7 @@ class RankedLayer final : public SceneLayer {
         if (m_state && m_state->match && !m_lastResult && m_preview && m_preview->isVisible()) {
             refreshMapCard(*m_state->match);
             refreshBandCard(*m_state->match);
+            refreshSongCard(*m_state->match);  // 1.0.8
         }
         if (!m_state || !m_state->match || m_lastResult || !m_downloadText[0]) return;
         auto const& match = *m_state->match;
@@ -10715,6 +10941,9 @@ class RankedLayer final : public SceneLayer {
         m_bandCard = nullptr;
         m_bandCardKey.clear();
         refreshBandCard(match);
+        m_songCard = nullptr;  // 1.0.8: 오른쪽 노래 칸
+        m_songCardKey.clear();
+        refreshSongCard(match);
         // 왼쪽 아래: 내 프로필 버튼, 그 오른쪽에 LDM 체크박스.
         iconButton(actions, this, menu_selector(RankedLayer::onSeason2Profile), "GJ_profileButton_001.png",
                    {14.f, rowY}, 22.f)
