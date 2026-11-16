@@ -51,6 +51,13 @@ void cancelMapPreparation(int64_t levelID);
 bool skipMapAudio(int64_t levelID);
 // 방이나 선택된 맵(추첨)이 바뀌면 건너뛰기 선택을 해제한다.
 bool mapAudioSkipped(int64_t levelID);
+// 1.0.8: 받아 둔 맵을 음악 없이 하게 되는지와 그 이유. 노래가 하나라도 없으면 None 이 아니다:
+// Skipped(플레이어가 음악 건너뛰기), Setting(Ranked의 Always Download Song 꺼짐), Unavailable(받지 못함).
+// 다운로드가 끝난 맵(준비 완료)에서만 의미가 있다.
+enum class MapSilence { None, Unavailable, Skipped, Setting };
+MapSilence mapSilence(int64_t levelID);
+// 그 이유를 한 줄로 (None 이면 빈 문자열).
+std::string mapSilenceText(MapSilence silence);
 // 배틀 화면에서 쓸 폰트/스프라이트를 미리 로드해 둔다.
 void preloadBattleAssets();
 // 메모리에 있거나 GD에 저장된 레벨 객체를 돌려준다(없으면 nullptr).

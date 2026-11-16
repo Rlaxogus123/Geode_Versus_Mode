@@ -8,6 +8,7 @@
 - Skip Music is now its own blue button instead of taking over the Ready / GET READY button while the map downloads, so pressing Ready (or the main Ranked button) no longer skips the music by accident. It sits away from those buttons (1v1 rooms: next to Downloading in the middle row; Group rooms: next to the download progress; Ranked Season 2: right of LDM on the match card) and can be pressed one second after it appears.
 - Result screens show each player's user coins (the battle result, its MATCH RESULT card and the match record). When both cleared (or reached the same %) with the same number of failed runs and the coins decided it, the winner's coins grow and glow and the reason says so ("More coins: 1 vs 0").
 - Lobby music: when GD's song limit deleted the song chosen as the Versus lobby music, the default music played until it was downloaded again by hand. Now the Ranked screen downloads it again by itself (while no match is running) and switches to it once it is back.
+- Battles that start without music (the song could not be downloaded, Skip Music was pressed, or Always Download Song is off) now say so: the loading screen shows a red NO MUSIC box with the reason, the same box shows for a few seconds when the level starts, and the Ranked match card and room download captions read NO MUSIC / Ready - no music in red instead of a plain 100%.
 
 ## v1.0.7 (in progress)
 

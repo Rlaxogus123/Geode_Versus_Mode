@@ -1320,11 +1320,15 @@ class GroupRoomLayer : public SceneLayer {
     void updateDownload() {
         if (!m_downloadLabel || m_mapID <= 0) return;
         auto const progress = mapDownloadProgress(m_mapID);
-        auto text = progress.complete() ? std::string("Map ready") : fmt::format("Download {}%", progress.percent);
+        // 1.0.8: 음악을 건너뛰고 받은 맵이면 "Map ready - no music"(붉게).
+        bool const silent = progress.complete() && mapSilence(m_mapID) != MapSilence::None;
+        auto text = silent                ? std::string("Map ready - no music")
+                    : progress.complete() ? std::string("Map ready")
+                                          : fmt::format("Download {}%", progress.percent);
         if (text == m_downloadKey) return;
         m_downloadKey = text;
         m_downloadLabel->setString(text.c_str());
-        m_downloadLabel->setColor(progress.complete() ? ccc3(135, 255, 175) : kIce);
+        m_downloadLabel->setColor(silent ? kNoMusicColor : progress.complete() ? ccc3(135, 255, 175) : kIce);
     }
 
     // 방 화면 전체를 다시 그려야 하는지 비교하는 시그니처.

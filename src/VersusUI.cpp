@@ -97,6 +97,7 @@ constexpr int kRoomPageSize = 4;
 constexpr int kHistoryPageSize = 5;
 // UI 공통 색상 (밝은 얼음색 / 흐린 보조색).
 constexpr ccColor3B kIce = {155, 225, 255};
+constexpr ccColor3B kNoMusicColor = {255, 118, 104};  // 1.0.8: 노래 없이 하는 대결 표시 색
 constexpr ccColor3B kMuted = {150, 185, 225};
 // 퀵챗 프리셋 문구 (방 안에서 버튼 하나로 보낼 수 있는 고정 메시지).
 constexpr std::array<char const*, 12> kQuickChat = {"Hello!",    "Good Luck!", "Have Fun!",    "Pro",
@@ -4537,9 +4538,13 @@ class RoomLayer : public SceneLayer {
             }
             bool const stale =
                 i != 0 && known && !progress.complete() && Service::get().serverNow() - shared.updatedAt > 25000;
+            // 1.0.8: 내 카드 - 음악을 건너뛰고 받은 맵이면 "Ready - no music"(붉게).
+            bool const silent = i == 0 && room.level.id > 0 && progress.complete() &&
+                                mapSilence(room.level.id) != MapSilence::None;
             auto title = room.level.id <= 0 ? std::string{}
                          : !known           ? "Syncing..."
                          : stale            ? "Sync delayed"
+                         : silent           ? std::string("Ready - no music")
                                  : fmt::format("{} {}%", progress.complete() ? "Ready" : "Download", progress.percent);
             auto key = title + ":" + std::to_string(progress.percent);
             if (widget.key == key) continue;
@@ -4547,7 +4552,10 @@ class RoomLayer : public SceneLayer {
             widget.caption->setString(title.c_str());
             widget.caption->setScale(
                 std::min(.28f, widget.width / std::max(1.f, widget.caption->getContentSize().width)));
-            auto color = progress.complete() && known ? ccc3(135, 255, 175) : stale ? ccc3(255, 210, 125) : kIce;
+            auto color = silent                       ? kNoMusicColor
+                         : progress.complete() && known ? ccc3(135, 255, 175)
+                         : stale                        ? ccc3(255, 210, 125)
+                                                        : kIce;
             widget.caption->setColor(color);
             widget.fill->setColor(color);
             widget.fill->setScaleX(room.level.id > 0 && known ? progress.percent / 100.f : 0.f);
@@ -7579,6 +7587,7 @@ class RankedLayer final : public SceneLayer {
         if (m_downloadRow) m_downloadRow->setVisible(downloadPhase(match));
         for (int side = 0; side < 2; ++side) {
             int percent = 0;
+            bool silent = false;
             std::string detail = "WAITING FOR MAP";
             if (match.selectedMap) {
                 if (side == 0) {
@@ -7603,8 +7612,16 @@ class RankedLayer final : public SceneLayer {
                     percent = 100;
                     detail = "100%  READY";
                 }
+                // 1.0.8: 내 쪽이 노래 없이 하게 됐으면(받기가 끝난 뒤) 칸에 붉게 NO MUSIC.
+                if (side == 0 && (match.ownReady || (m_assetsReady && m_assetMatch == match.drawId)) &&
+                    mapSilence(match.selectedMap->id) != MapSilence::None) {
+                    percent = 100;
+                    detail = match.ownReady ? "READY - NO MUSIC" : "100%  NO MUSIC";
+                    silent = true;
+                }
             }
             m_downloadText[side]->setString(detail.c_str());
+            m_downloadText[side]->setColor(silent ? kNoMusicColor : kIce);
             m_downloadText[side]->limitLabelWidth(m_downloadTextWidth > 0.f ? m_downloadTextWidth : m_downloadWidth,
                                                   m_downloadTextScale, .22f);
             auto* fill = m_downloadFill[side];
@@ -7612,8 +7629,11 @@ class RankedLayer final : public SceneLayer {
             if (percent > 0) {
                 float w = m_downloadWidth * std::clamp(percent, 0, 100) / 100.f, h = m_downloadBarH;
                 CCPoint p[] = {{0, 0}, {w, 0}, {w, h}, {0, h}};
-                fill->drawPolygon(p, 4, side ? ccColor4F{.15f, .75f, 1.f, 1} : ccColor4F{1, .6f, .18f, 1}, 0,
-                                  {0, 0, 0, 0});
+                fill->drawPolygon(p, 4,
+                                  silent ? ccColor4F{1.f, .36f, .3f, 1}
+                                  : side ? ccColor4F{.15f, .75f, 1.f, 1}
+                                         : ccColor4F{1, .6f, .18f, 1},
+                                  0, {0, 0, 0, 0});
             }
         }
     }
@@ -8083,7 +8103,7 @@ class RankedLayer final : public SceneLayer {
                         : retrying
                             ? fmt::format("Map download failed - trying again ({}/{})...", m_assetAttempts, kAssetTries)
                                   .c_str()
-                        : match.selectedMap ? fmt::format("{} / {}", match.selectedMap->name, progress.detail()).c_str()
+                        : match.selectedMap ? fmt::format("{} / {}", match.selectedMap->name, ownAudioText(match, progress)).c_str()
                                             : "Selecting map...");
                     // 1.0.8: 메인 버튼은 GET READY(비활성) 그대로. 건너뛰기는 미리보기의 따로 둔 버튼이 맡는다.
                     setAction("GET READY", false);
@@ -8495,6 +8515,17 @@ class RankedLayer final : public SceneLayer {
         auto const& match = *m_state->match;
         return match.state == "preparing" && !match.ownReady && match.selectedMap && m_assetMatch == match.drawId &&
                !mapAudioSkipped(match.selectedMap->id);
+    }
+    // 1.0.8: 준비 단계 안내 줄의 내 다운로드 부분. 받기가 끝났는데 노래 없이 하게 됐으면 그 이유를 쓴다.
+    std::string ownAudioText(RankedMatch const& match, MapDownloadProgress const& progress) const {
+        if (match.selectedMap && m_assetsReady && m_assetMatch == match.drawId)
+            switch (mapSilence(match.selectedMap->id)) {
+            case MapSilence::Unavailable: return "NO MUSIC (song unavailable)";
+            case MapSilence::Skipped: return "NO MUSIC (skipped)";
+            case MapSilence::Setting: return "NO MUSIC (Always Download Song off)";
+            case MapSilence::None: break;
+            }
+        return progress.detail();
     }
     // 1.0.8: 따로 둔 음악 건너뛰기 버튼을 보이거나 숨기고, 이 추첨에서 보인 지 1초가 지나면 켠다.
     void refreshSkipMusic() {

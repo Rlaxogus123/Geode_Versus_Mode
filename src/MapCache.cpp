@@ -229,6 +229,11 @@ public:
         log::warn("Versus Ranked map {}: playing without {} {}", id, sound ? "sound" : "song", asset);
     }
     void waiveAudio(int id) { waivers[id].noAudio = Clock::now(); }
+    // Always Download Song 이 꺼져 이 맵을 무음으로 하기로 한 상태인지.
+    bool noAudioWaived(int id) const {
+        auto found = waivers.find(id);
+        return found != waivers.end() && found->second.noAudio && fresh(*found->second.noAudio);
+    }
     bool dropped(int asset, bool sound) const { return (sound ? droppedSounds : droppedSongs).contains(asset); }
     // 오디오를 포기한다. 미리 받기면 이번 작업에서만 제외하고, 아니면 건너뛰기로 기록한다.
     void giveUp(int asset, bool sound) {
@@ -782,6 +787,27 @@ bool skipMapAudio(int64_t id) {
 }
 bool mapAudioSkipped(int64_t id) {
     return Cache::get().audioSkipped(id);
+}
+MapSilence mapSilence(int64_t id) {
+    auto* level = cachedLevel(id);
+    if (!level || level->m_levelString.empty()) return MapSilence::None;
+    auto& cache = Cache::get();
+    auto const& songs = cache.assetsFor(level).first;
+    auto* music = MusicDownloadManager::sharedState();
+    if (std::all_of(songs.begin(), songs.end(), [music](int song) { return music->isSongDownloaded(song); }))
+        return MapSilence::None;
+    if (cache.audioSkipped(id)) return MapSilence::Skipped;
+    if (cache.noAudioWaived(static_cast<int>(id))) return MapSilence::Setting;
+    return MapSilence::Unavailable;
+}
+std::string mapSilenceText(MapSilence silence) {
+    switch (silence) {
+    case MapSilence::None: return {};
+    case MapSilence::Skipped: return "You skipped the music for this map.";
+    case MapSilence::Setting: return "Always Download Song is off (Ranked settings).";
+    case MapSilence::Unavailable: break;
+    }
+    return "The song could not be downloaded - this battle plays without it.";
 }
 // 맵 준비 요청의 공개 진입점. keepSaved이면 GD Saved에 계속 남긴다.
 void ensureMapCached(int64_t id, Done callback, AudioNeed need, bool prefetch, bool keepSaved) {

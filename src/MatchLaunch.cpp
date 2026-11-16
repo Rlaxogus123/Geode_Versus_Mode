@@ -318,6 +318,38 @@ void collectIDs(std::set<int>& result, gd::string const& encoded) {
     }
 }
 
+// 1.0.8: 음악 없이 하는 대결 안내 상자. 음악 끔 아이콘 + "NO MUSIC" + 이유 한 줄, (0,0)이 가운데.
+CCNodeRGBA* noMusicBox(versus::MapSilence silence, float width) {
+    auto* box = CCNodeRGBA::create();
+    box->setCascadeOpacityEnabled(true);
+    box->setID("no-music"_spr);
+    constexpr float height = 38.f;
+    auto* back = CCScale9Sprite::create("square02b_001.png");
+    back->setContentSize({width, height});
+    back->setColor(ccc3(78, 12, 18));
+    back->setOpacity(232);
+    box->addChild(back);
+    float x = -width / 2.f + 10.f;
+    if (auto* icon = CCSprite::createWithSpriteFrameName("GJ_musicOffBtn_001.png")) {
+        icon->setScale(26.f / std::max(1.f, icon->getContentSize().height));
+        icon->setPosition({x + 13.f, 0.f});
+        box->addChild(icon);
+        x += 32.f;
+    }
+    auto* title = CCLabelBMFont::create("NO MUSIC", "bigFont.fnt");
+    title->setAnchorPoint({0.f, .5f});
+    title->setColor(ccc3(255, 118, 104));
+    title->setPosition({x, 8.f});
+    title->limitLabelWidth(width - (x + width / 2.f) - 10.f, .42f, .2f);
+    box->addChild(title);
+    auto* reason = CCLabelBMFont::create(versus::mapSilenceText(silence).c_str(), "chatFont.fnt");
+    reason->setAnchorPoint({0.f, .5f});
+    reason->setPosition({x, -8.f});
+    reason->limitLabelWidth(width - (x + width / 2.f) - 10.f, .6f, .3f);
+    box->addChild(reason);
+    return box;
+}
+
 // 매치 로딩을 총괄하는 싱글턴 노드. 매 프레임 update에서 단계를 진행한다.
 class LaunchController final : public CCNode, public LevelDownloadDelegate, public MusicDownloadDelegate {
 public:
@@ -552,6 +584,12 @@ public:
         names->setVisible(false);
         root->addChild(names);
         versus::rebind(waitingNames, names);
+        // 1.0.8: 음악 없이 하는 대결이면 로딩 상자 바로 위에 크게 알린다.
+        if (auto const silence = versus::mapSilence(levelID); silence != versus::MapSilence::None) {
+            auto* box = noMusicBox(silence, 340.f);
+            box->setPosition({window.width / 2.f, window.height / 2.f + 47.f + 24.f});
+            root->addChild(box);
+        }
         if (!rewardsNote.empty()) {
             auto* note = CCLabelBMFont::create(rewardsNote.c_str(), "chatFont.fnt");
             note->setScale(.62f);
@@ -827,6 +865,16 @@ public:
         versus::cursor::hideForPlay();
 #endif
         phase = Phase::Playing;
+        // 1.0.8: 시작하는 순간에도 화면 아래쪽에 잠깐(4초) 알린다 - 노래가 안 나오는 게 고장이 아니라는 것.
+        if (auto const silence = versus::mapSilence(levelID); silence != versus::MapSilence::None) {
+            auto const window = CCDirector::sharedDirector()->getWinSize();
+            auto* box = noMusicBox(silence, std::min(300.f, window.width - 40.f));
+            box->setPosition({window.width / 2.f, 46.f});
+            box->setOpacity(0);
+            box->runAction(CCSequence::create(CCFadeIn::create(.2f), CCDelayTime::create(4.f), CCFadeOut::create(.6f),
+                                              CCRemoveSelf::create(), nullptr));
+            layer->addChild(box, 100006);
+        }
         versus::percent::enforce(layer);
         versus::battle::begin(layer);
         if (s_progress.armed && versus::battle::activeFor(layer)) s_progress.began = true;
