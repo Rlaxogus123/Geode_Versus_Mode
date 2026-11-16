@@ -23,6 +23,7 @@
 #include "MapCache.hpp"
 #include "BattleLevelData.hpp"
 #include "RoomControls.hpp"
+#include "CoinBadge.hpp"
 #include "RoomPin.hpp"
 #include "VersusAudio.hpp"
 #include "RandomMapPolicy.hpp"
@@ -2303,6 +2304,11 @@ std::string decisionReason(MatchRecord const& match) {
         return lost.pauseUsedMs >= kPauseBudget - 50 ? name + " ran out of pause time" : name + " left or disconnected";
     if (lost.paused || lost.pauseUsedMs >= kPauseBudget) return name + " ran out of pause time";
     if (match.rules.mode == 1) return fmt::format("first to reach {}%", match.rules.targetPercent);
+    // 1.0.8: 같은 기록(클리어·실패 횟수)에서 유저 코인 수로 갈림
+    if (coinsDecided(match.selfStats, match.opponentStats, match.rules, false)) {
+        auto const& winner = won ? match.selfStats : match.opponentStats;
+        return fmt::format("more coins: {} vs {}", winner.userCoins, lost.userCoins);
+    }
     return {};
 }
 
@@ -2372,10 +2378,28 @@ class MatchDetailPopup : public ::versus::DeferredPopup {
                 hit->setPosition({side ? 304.f : 107.f, 180.f});
                 m_buttonMenu->addChild(hit);
             }
-            label(m_mainLayer, fmt::format("Best {}%", m_match.selfStats.bestPercent), {107.f, 167.f}, .5f, 110.f, kIce,
-                  true, "chatFont.fnt");
-            label(m_mainLayer, fmt::format("Best {}%", m_match.opponentStats.bestPercent), {304.f, 167.f}, .5f, 100.f,
-                  kIce, true, "chatFont.fnt");
+            auto* selfBest = label(m_mainLayer, fmt::format("Best {}%", m_match.selfStats.bestPercent),
+                                   {107.f, 167.f}, .5f, 110.f, kIce, true, "chatFont.fnt");
+            auto* opponentBest = label(m_mainLayer, fmt::format("Best {}%", m_match.opponentStats.bestPercent),
+                                       {304.f, 167.f}, .5f, 100.f, kIce, true, "chatFont.fnt");
+            // 1.0.8: 유저 코인 수 (누가 먹었으면). 코인 수로 갈렸으면 이긴 쪽이 크게 빛난다.
+            auto const& selfStats = m_match.selfStats;
+            auto const& opponentStats = m_match.opponentStats;
+            if (selfStats.userCoins > 0 || opponentStats.userCoins > 0) {
+                bool const byCoins =
+                    m_match.result != "draw" && coinsDecided(selfStats, opponentStats, m_match.rules, false);
+                constexpr float kCoins = .7f, kGrow = 1.45f;
+                for (auto [best, coins, winner] :
+                     {std::tuple{selfBest, selfStats.userCoins, m_match.result == "win"},
+                      std::tuple{opponentBest, opponentStats.userCoins, m_match.result == "loss"}}) {
+                    bool const decisive = byCoins && winner;
+                    float const half = coinBadgeWidth(coins, 0) * kCoins * (decisive ? kGrow : 1.f) / 2.f;
+                    auto* badge = coinBadge(coins, 0, kCoins, decisive, .25f, kGrow);
+                    badge->setPosition(
+                        {best->getPositionX() + best->getScaledContentSize().width + 5.f + half, best->getPositionY()});
+                    m_mainLayer->addChild(badge, 4);
+                }
+            }
             for (int side = 0; side < 2; ++side) {
                 auto const& stats = side ? m_match.opponentStats : m_match.selfStats;
                 float const x = side ? 304.f : 107.f, width = side ? 100.f : 110.f;

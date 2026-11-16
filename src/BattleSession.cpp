@@ -10,6 +10,7 @@
 #include "IntegrityCodes.hpp"
 #include "IntegrityFeatures.hpp"
 #include "BattleHUD.hpp"
+#include "CoinBadge.hpp"
 #include "GroupResult.hpp"
 #include "Edition.hpp"
 #include "MenuCursor.hpp"
@@ -27,6 +28,7 @@
 #include "DebugMode.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/FMODAudioEngine.hpp>
+#include <tuple>
 #include <cmath>
 #include <map>
 #include <Geode/binding/PlayLayer.hpp>
@@ -1669,10 +1671,19 @@ public:
     struct ResultReason {
         std::string text;
         bool disconnected = false;
+        bool coins = false;  // 1.0.8: 같은 기록에서 유저 코인 수로 갈림
     };
     ResultReason resultReason(BattleInfo const& info) const {
         if (info.draw) return {};
+        auto const& winnerState = info.winnerUid == hostProfile.uid ? info.host : info.guest;
         auto const& loserState = info.winnerUid == hostProfile.uid ? info.guest : info.host;
+        if (coinsDecided(info.host, info.guest, rules, info.draw)) {
+            int const more = winnerState.userCoins, fewer = loserState.userCoins;
+            if (info.winnerUid == uid) return {fmt::format("More coins: {} vs {}", more, fewer), false, true};
+            if (uid == hostProfile.uid || uid == guestProfile.uid)
+                return {fmt::format("Fewer coins: {} vs {}", fewer, more), false, true};
+            return {fmt::format("Decided by coins: {} vs {}", more, fewer), false, true};
+        }
         if (!loserState.forfeited && loserState.pausedAt <= 0) return {};
         bool const won = info.winnerUid == uid;
         bool const disconnected = loserState.forfeited && loserState.integrityCode.empty() &&
@@ -1764,24 +1775,17 @@ public:
         guestPreview->setPosition({window.width / 2.f + 95.f, window.height / 2.f - 10.f});
         progress->addChild(hostPreview);
         progress->addChild(guestPreview);
-        if (levelUserCoins > 0) {
-            auto coinCount = [progress, window](float x, int coins) {
-                auto* group = CCNode::create();
-                group->setPosition({window.width / 2.f + x, window.height / 2.f + 28.f});
-                auto* coin = CCSprite::createWithSpriteFrameName("usercoin_small01_001.png");
-                if (coin) {
-                    coin->setScale(.42f);
-                    coin->setPosition({-14.f, 0.f});
-                    group->addChild(coin);
-                }
-                auto* value = createCosmeticLabel(fmt::format("{}/3", std::clamp(coins, 0, 3)).c_str(), "goldFont.fnt");
-                value->setScale(.45f);
-                value->setPosition({8.f, 0.f});
-                group->addChild(value);
-                progress->addChild(group, 8);
-            };
-            coinCount(-95.f, info.host.userCoins);
-            coinCount(95.f, info.guest.userCoins);
+        // 1.0.8: 유저 코인 수 (맵에 코인이 있거나 누가 먹었으면). 코인 수로 갈렸으면 승자 쪽이 승패 발표 때
+        // 크게 튀어나와 빛난다.
+        bool const coinsShown = levelUserCoins > 0 || info.host.userCoins > 0 || info.guest.userCoins > 0;
+        bool const byCoins = coinsDecided(info.host, info.guest, rules, info.draw);
+        if (coinsShown) {
+            for (auto [x, state, winner] : {std::tuple{-95.f, &info.host, info.winnerUid == hostProfile.uid},
+                                            std::tuple{95.f, &info.guest, info.winnerUid == guestProfile.uid}}) {
+                auto* badge = coinBadge(state->userCoins, levelUserCoins, .95f, byCoins && winner, RESULT_PROGRESS_TIME);
+                badge->setPosition({window.width / 2.f + x, window.height / 2.f + 28.f});
+                progress->addChild(badge, 8);
+            }
         }
         styleNickname(resultLabel(progress, hostProfile.name, -95.f, -56.f, 170.f, .5f, "bigFont.fnt"),
                       hostProfile.membership, hostProfile.cosmetics);
@@ -1821,7 +1825,8 @@ public:
         if (auto footer = returnStatus.lock()) footer->setZOrder(40);
         if (auto const why = resultReason(info); !why.text.empty()) {
             auto* reason = createCosmeticLabel(why.text.c_str(), "chatFont.fnt");
-            reason->setScale(.75f);
+            reason->setScale(why.coins ? .6f : .75f);  // (코인 문구는 양옆 코인 배지 사이에 들어가게)
+            if (why.coins) reason->setColor(ccc3(255, 214, 90));
             reason->setPosition({window.width / 2.f, window.height / 2.f + 36.f});
             decision->addChild(reason);
         }
@@ -1897,6 +1902,21 @@ public:
         for (auto [x, best] : {std::pair{-playerX, hostBefore}, std::pair{playerX, guestBefore}}) {
             auto [text, color] = mapRecordText(best);
             if (!text.empty()) popupLabel(text, x, -58.f, 150.f, .5f, "chatFont.fnt")->setColor(color);
+        }
+        // 1.0.8: 카드에도 각 선수의 퍼센트 오른쪽에 유저 코인 수. 코인 수로 이긴 쪽은 카드가 뜰 때 커지며 빛난다.
+        if (coinsShown) {
+            constexpr float kCardCoins = .8f, kCardGrow = 1.6f;
+            for (auto [score, state, winner] : {std::tuple{hostScore, &info.host, info.winnerUid == hostProfile.uid},
+                                                std::tuple{guestScore, &info.guest, info.winnerUid == guestProfile.uid}}) {
+                bool const decisive = byCoins && winner;
+                float const half = coinBadgeWidth(state->userCoins, levelUserCoins) * kCardCoins *
+                                   (decisive ? kCardGrow : 1.f) / 2.f;
+                auto* badge = coinBadge(state->userCoins, levelUserCoins, kCardCoins, decisive,
+                                        RESULT_CONFIRM_START + .35f, kCardGrow);
+                badge->setPosition(
+                    {score->getPositionX() + score->getScaledContentSize().width / 2.f + 6.f + half, score->getPositionY()});
+                popup->addChild(badge, 3);
+            }
         }
 
         auto* menu = CCMenu::create();
