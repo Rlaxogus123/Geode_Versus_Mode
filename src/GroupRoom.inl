@@ -25,6 +25,11 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     CCMenuItemSpriteExtra* m_practiceButton = nullptr;
     CCMenuItemSpriteExtra* m_timeButton = nullptr;
     CCNode* m_beta = nullptr;
+    NineSlice* m_modePanel = nullptr;  // 모드 판(1:1 규칙 창처럼 모드마다 색)
+    // 창 크기와 줄 높이. 높이 284 = 화면 높이 320에서 위아래 18(닫기 버튼 자리)을 뺀 것.
+    static constexpr float kW = 300.f, kH = 284.f;
+    static constexpr float kModeY = 236.f, kValueY = 190.f, kAutoHintY = 170.f, kRulesHintY = 156.f;
+    static constexpr float kMaxY = 108.f, kSpeedY = 58.f, kApplyY = 22.f;
     CCLabelBMFont* m_valueCaption = nullptr;
     CCLabelBMFont* m_unlimited = nullptr;
     CCLabelBMFont* m_rulesHint = nullptr;
@@ -82,12 +87,14 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     // 자동 생명이 켜져 있으면 레벨에서 계산한 생명 수를 쓴다.
     void showValues() {
         bool const timed = m_mode == 2;
-        caption(m_modeButton, modeCaption(m_mode), "GJ_button_04.png", 136.f);
+        caption(m_modeButton, modeCaption(m_mode), "GJ_button_01.png", 136.f);  // (모드 버튼은 항상 초록)
+        m_modePanel->setColor(modePanelColor(m_mode));
+        m_modePanel->setOpacity(modePanelOpacity(m_mode));
         placeBetaSticker(m_modeButton, m_beta, timed, .85f);
         caption(m_practiceButton, m_practice ? "Practice: ON" : "Practice: OFF",
                 m_practice ? "GJ_button_01.png" : "GJ_button_04.png", 108.f);
         // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 그 자리에 시간 방식 버튼을 둔다.
-        caption(m_timeButton, m_timeType == 0 ? "Time: Fixed" : "Time: Map %", "GJ_button_04.png", 108.f);
+        caption(m_timeButton, m_timeType == 0 ? "Time: Fixed" : "Time: Map %", "GJ_button_01.png", 108.f);
         m_practiceButton->setVisible(!timed);
         m_timeButton->setVisible(timed);
         m_valueCaption->setString(m_mode == 1   ? "TARGET % (1-100)"
@@ -126,12 +133,13 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
                               : clockValue()  ? "When the time is up, everyone gets one last attempt"
                                               : timeLengthLine(timeRules(), m_level, m_random).c_str());
         m_autoHint->limitLabelWidth(260.f, .3f, .1f);
-        m_autoHint->setColor(timed ? ccc3(255, 205, 140) : m_autoLives ? ccc3(150, 255, 175) : kMuted);
+        m_autoHint->setColor(timed ? kTimeHint : m_autoLives ? ccc3(150, 255, 175) : kMuted);
         m_rulesHint->setString(timed        ? "BETA: best % within the time wins. The first clear takes 1st."
                                : m_mode == 1 ? "The first to reach the target % wins."
                                : m_practice  ? "Practice, no attempt limit: the fewest failed runs to a clear wins."
                                              : "Best % wins, then fewer failed runs, then coins.");
         m_rulesHint->limitLabelWidth(260.f, .5f, .1f);
+        m_rulesHint->setColor(timed ? kTimeHint : kMuted);
     }
     // 맵이 아직 추첨 전(풀에서 굴려야 하거나 랜덤 추첨이 확정되지 않음)인지.
     static bool toRoll(GroupRoomInfo const& room) {
@@ -273,9 +281,20 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     }
     // 방의 현재 규칙으로 값을 채우고 위젯을 배치한다.
     bool init(GroupRoomInfo const& room) {
-        if (!Popup::init(300.f, 336.f, "GJ_square02.png")) return false;
+        if (!Popup::init(kW, kH, "GJ_square02.png")) return false;
         geode::addSideArt(m_mainLayer, SideArt::All, SideArtStyle::PopupBlue);
         setTitle("Group Rules", "bigFont.fnt", .62f);
+        // 모드 판(모드 버튼 ~ 규칙 안내)과 인원·속도 판(검정). 1:1 Game Rules 창과 같은 모양.
+        m_modePanel = NineSlice::create("square02b_001.png");
+        m_modePanel->setContentSize({272.f, 104.f});
+        m_modePanel->setPosition({kW / 2.f, 199.f});
+        m_mainLayer->addChild(m_modePanel);
+        auto* settingsPanel = NineSlice::create("square02b_001.png");
+        settingsPanel->setContentSize({272.f, 96.f});
+        settingsPanel->setPosition({kW / 2.f, 96.f});
+        settingsPanel->setColor(ccc3(0, 0, 0));
+        settingsPanel->setOpacity(110);
+        m_mainLayer->addChild(settingsPanel);
         m_attempts = std::clamp(room.rules.attempts, 1, 99);
         m_mode = std::clamp(room.rules.mode, 0, 2);
         m_practice = room.rules.practice && m_mode != 2;
@@ -292,15 +311,15 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_random = toRoll(room);
         m_autoLives = room.rules.autoLives;
         m_modeButton =
-            button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onMode), "Mode: Attempts", {82.f, 270.f}, .42f);
+            button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onMode), "Mode: Attempts", {80.f, kModeY}, .42f);
         m_modeButton->setID("group-rules-mode"_spr);
         m_beta = betaSticker(.85f);
         m_modeButton->addChild(m_beta, 5);
         m_practiceButton = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onPractice), "Practice: OFF",
-                                  {220.f, 270.f}, .42f);
+                                  {224.f, kModeY}, .42f);
         m_practiceButton->setID("group-rules-practice"_spr);
         m_timeButton = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onTimeType), "Time: Fixed",
-                              {220.f, 270.f}, .42f);
+                              {224.f, kModeY}, .42f);
         m_timeButton->setID("group-rules-time-type"_spr);
         auto row = [this](char const* caption, float y, int base, TextInput*& value, int initial, size_t digits,
                           std::function<void(int)> typed) {
@@ -319,7 +338,7 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         };
         auto self = Weak<GroupRulesPopup>(this);
         m_valueCaption =
-            row("LIVES", 212.f, 0, m_livesInput, m_mode == 1 ? m_target : m_attempts, 3, [self](int value) {
+            row("LIVES", kValueY, 0, m_livesInput, m_mode == 1 ? m_target : m_attempts, 3, [self](int value) {
                 auto owner = self.lock();
                 if (!owner) return;
                 if (owner->clockValue()) {
@@ -332,8 +351,8 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
                 } else if (owner->lives() && !owner->m_autoLives && value >= 1 && value <= 99)
                     owner->m_attempts = value;
             });
-        m_unlimited = label(m_mainLayer, "No attempt limit", {150.f, 212.f}, .45f, 200.f, kIce);
-        row(fmt::format("MAX PLAYERS ({}-{})", m_minimum, kGroupMaxPlayers).c_str(), 152.f, 10, m_maxInput, m_max, 2,
+        m_unlimited = label(m_mainLayer, "No attempt limit", {150.f, kValueY}, .45f, 200.f, kIce);
+        row(fmt::format("MAX PLAYERS ({}-{})", m_minimum, kGroupMaxPlayers).c_str(), kMaxY, 10, m_maxInput, m_max, 2,
             [self](int value) {
                 if (auto owner = self.lock(); owner && value >= owner->m_minimum && value <= kGroupMaxPlayers)
                     owner->m_max = value;
@@ -341,25 +360,25 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_maxInput->setID("group-max-players-input"_spr);
         m_auto = CCMenuItemToggler::createWithStandardSprites(this, menu_selector(GroupRulesPopup::onAuto), .42f);
         m_auto->setID("group-auto-lives"_spr);
-        m_auto->setPosition({194.f, 236.f});
+        m_auto->setPosition({194.f, kValueY + 24.f});
         m_auto->toggle(m_autoLives);
         m_buttonMenu->addChild(m_auto);
-        m_autoLabel = label(m_mainLayer, "AUTO", {205.f, 236.f}, .3f, 40.f, kIce, true);
-        m_autoHint = label(m_mainLayer, "", {150.f, 191.f}, .3f, 260.f, kMuted, false, "chatFont.fnt");
-        label(m_mainLayer, "SPEED (0.5x-3x)", {150.f, 116.f}, .34f, 220.f, kIce);
-        m_speedLabel = label(m_mainLayer, speedText(m_speed), {150.f, 92.f}, .5f, 70.f);
+        m_autoLabel = label(m_mainLayer, "AUTO", {205.f, kValueY + 24.f}, .3f, 40.f, kIce, true);
+        m_autoHint = label(m_mainLayer, "", {150.f, kAutoHintY}, .3f, 260.f, kMuted, false, "chatFont.fnt");
+        label(m_mainLayer, "SPEED (0.5x-3x)", {150.f, kSpeedY + 24.f}, .34f, 220.f, kIce);
+        m_speedLabel = label(m_mainLayer, speedText(m_speed), {150.f, kSpeedY}, .5f, 70.f);
         m_speedLabel->setID("group-speed-value"_spr);
         static constexpr std::array<std::pair<char const*, float>, 4> kSpeedButtons{
             {{"-1x", 62.f}, {"<", 104.f}, {">", 196.f}, {"+1x", 238.f}}};
         static constexpr std::array<int, 4> kSpeedTags{23, 21, 22, 24};
         for (size_t i = 0; i < kSpeedButtons.size(); ++i) {
             auto* item = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::step), kSpeedButtons[i].first,
-                                {kSpeedButtons[i].second, 92.f}, .5f, "GJ_button_04.png");
+                                {kSpeedButtons[i].second, kSpeedY}, .5f, "GJ_button_04.png");
             item->setTag(kSpeedTags[i]);
             m_steps.push_back(item);
         }
-        m_rulesHint = label(m_mainLayer, "", {150.f, 60.f}, .5f, 260.f, kMuted, false, "chatFont.fnt");
-        m_apply = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onApply), "Apply", {150.f, 28.f}, .6f);
+        m_rulesHint = label(m_mainLayer, "", {150.f, kRulesHintY}, .5f, 260.f, kMuted, false, "chatFont.fnt");
+        m_apply = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onApply), "Apply", {150.f, kApplyY}, .6f);
         showValues();
         refresh();
         return true;
@@ -369,6 +388,18 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     }
 
 public:
+    // 화면이 창(닫기 버튼 포함, 가장자리 18)보다 낮거나 좁으면 창 전체를 같은 비율로 줄여서 띄운다.
+    void show() override {
+        DeferredPopup::show();
+        constexpr float kEdge = 18.f;
+        auto const win = CCDirector::sharedDirector()->getWinSize();
+        float const fit = std::min({1.f, (win.width - 2.f * kEdge) / std::max(1.f, m_size.width),
+                                    (win.height - 2.f * kEdge) / std::max(1.f, m_size.height)});
+        if (fit >= 1.f || fit <= 0.f) return;
+        m_mainLayer->stopAllActions();
+        m_mainLayer->setScale(.1f * fit);
+        m_mainLayer->runAction(CCEaseElasticOut::create(CCScaleTo::create(.5f, fit), .6f));
+    }
     static GroupRulesPopup* create(GroupRoomInfo const& room) {
         auto* result = new GroupRulesPopup;
         if (result->init(room)) {

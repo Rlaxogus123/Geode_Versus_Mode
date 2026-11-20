@@ -135,7 +135,7 @@ class MapPoolList final : public CCNode {
             auto* stars = starRating(row, std::to_string(entry.level.stars), {}, .26f, 26.f);
             float const starsW = stars->getContentSize().width * stars->getScale();
             stars->setPosition({right - starsW / 2.f, y - 6.f});
-            label(row, fmt::format("by {}{}", entry.name, entry.twoPlayer ? "  |  2-Player" : ""), {textX, y - 6.f},
+            label(row, fmt::format("added by {}{}", entry.name, entry.twoPlayer ? "  |  2-Player" : ""), {textX, y - 6.f},
                   .36f, std::max(10.f, right - starsW - 4.f - textX), kIce, true, "chatFont.fnt");
             if (removable) {
                 auto* remove = CCSprite::createWithSpriteFrameName("GJ_deleteBtn_001.png");

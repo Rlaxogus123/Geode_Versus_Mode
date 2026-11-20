@@ -3443,6 +3443,16 @@ std::string autoLivesLine(bool on, LevelInfo const& level, bool random, char con
 char const* modeCaption(int mode) {
     return mode == 2 ? "Mode: Time 3/3" : mode == 1 ? "Mode: Percent 2/3" : "Mode: Attempts 1/3";
 }
+// 규칙 창의 모드 판 색(1:1·그룹 공통): Attempts 회청, Percent 초록, Time 노랑(파란 창 위에서도 노랗게 보이도록 더
+// 진하게; 그 위의 안내 글자는 kTimeHint).
+ccColor3B modePanelColor(int mode) {
+    return mode == 2 ? ccc3(255, 230, 60) : mode == 1 ? ccc3(150, 255, 165) : ccc3(205, 210, 220);
+}
+GLubyte modePanelOpacity(int mode) {
+    return mode == 2 ? 160 : mode == 1 ? 110 : 95;
+}
+// 노란 시간제 판 위의 안내 글자(chatFont) 색.
+constexpr ccColor3B kTimeHint = {25, 35, 80};
 // 시간제(Time)가 베타라는 표시: 버튼 오른쪽에 붙는 작은 빨간 "BETA" 딱지(32x13, 살짝 맥동한다).
 // scale은 작은 버튼에 붙일 때 줄이는 배율.
 CCNode* betaSticker(float scale = 1.f) {
@@ -3634,7 +3644,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         m_timeType =
             button(m_buttonMenu, this, menu_selector(GameRulesPopup::onTimeType), "Time: Fixed", {98.f, 109.f}, .5f);
         m_timeType->setID("rules-time-type"_spr);
-        m_timeHint = label(m_mainLayer, "", {165.f, 139.f}, .5f, 270.f, kMuted, false, "chatFont.fnt");
+        m_timeHint = label(m_mainLayer, "", {165.f, 139.f}, .5f, 270.f, kTimeHint, false, "chatFont.fnt");
         m_timeHint->setID("rules-time-hint"_spr);
         m_speedLabel = label(m_mainLayer, "Speed: 1x", {165.f, 80.f}, .5f, 120.f, kIce);
         m_speedLess = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onSpeedLess), "-", {95.f, 80.f}, .46f);
@@ -3678,12 +3688,10 @@ class GameRulesPopup : public ::versus::DeferredPopup {
     // Auto가 켜져 있으면 맵에서 계산한 개수를 쓰며 직접 입력은 막는다.
     void refresh() {
         bool const timed = m_rules.mode == 2;
-        caption(m_mode, modeCaption(m_rules.mode), .62f, "GJ_button_04.png", 232.f);
+        caption(m_mode, modeCaption(m_rules.mode), .62f, "GJ_button_01.png", 232.f);  // (모드 버튼은 항상 초록)
         placeBetaSticker(m_mode, m_beta, timed);
-        m_rulesPanel->setColor(m_rules.mode == 0   ? ccc3(205, 210, 220)
-                               : m_rules.mode == 1 ? ccc3(150, 255, 165)
-                                                   : ccc3(255, 170, 70));
-        m_rulesPanel->setOpacity(m_rules.mode == 0 ? 95 : 110);
+        m_rulesPanel->setColor(modePanelColor(m_rules.mode));
+        m_rulesPanel->setOpacity(modePanelOpacity(m_rules.mode));
         bool const unlimited = m_rules.mode == 0 && m_rules.practice;
         bool const autoOn = m_rules.livesFollowMap();
         if (autoOn)
@@ -3708,7 +3716,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 그 자리에 시간 방식 버튼을 둔다.
         m_practice->setVisible(!timed);
         m_timeType->setVisible(timed);
-        caption(m_timeType, m_rules.timeType == 0 ? "Time: Fixed" : "Time: Map %", .5f);
+        caption(m_timeType, m_rules.timeType == 0 ? "Time: Fixed" : "Time: Map %", .5f, "GJ_button_01.png");
         enabled(m_timeType, !m_pending && !m_readOnly);
         m_timeHint->setVisible(timed);
         if (timed) {
