@@ -3,11 +3,14 @@
 // 강퇴/차단 선택 RemovePlayerPopup, 방 화면 본체 GroupRoomLayer. 방 상태는 Service::get().group()에서 읽고,
 // 변경은 Service 호출로 서버에 보낸다.
 //
-// 방장이 그룹 방 규칙(모드, 연습, 생명/목표 %, 최대 인원, 속도)을 바꾸는 팝업.
-// m_mode 0은 Attempts(생명), 1은 Percent(목표 %). 요청 중(m_pending)에는 입력을 막는다.
+// 방장이 그룹 방 규칙(모드, 연습, 생명/목표 %/시간, 최대 인원, 속도)을 바꾸는 팝업.
+// m_mode 0은 Attempts(생명), 1은 Percent(목표 %), 2는 Time(시간제, 베타). 요청 중(m_pending)에는 입력을 막는다.
 class GroupRulesPopup final : public ::versus::DeferredPopup {
     int m_attempts = 3, m_max = kGroupMaxPlayers, m_minimum = kGroupMinPlayers, m_speed = 100;
     int m_mode = 0, m_target = 40;
+    // 시간제: 시간 방식(0 Fixed, 1 Map %)과 값. 시간제로 바꾸기 전의 연습 규칙(시간제에는 없다)도 기억한다.
+    int m_timeType = 0, m_timeSeconds = kTimeDefaultSeconds, m_timePercent = kTimeDefaultPercent;
+    bool m_savedPractice = false;
     bool m_practice = false;
     bool m_pending = false;
     std::string m_roomID;
@@ -20,6 +23,8 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     CCLabelBMFont* m_speedLabel = nullptr;
     CCMenuItemSpriteExtra* m_modeButton = nullptr;
     CCMenuItemSpriteExtra* m_practiceButton = nullptr;
+    CCMenuItemSpriteExtra* m_timeButton = nullptr;
+    CCNode* m_beta = nullptr;
     CCLabelBMFont* m_valueCaption = nullptr;
     CCLabelBMFont* m_unlimited = nullptr;
     CCLabelBMFont* m_rulesHint = nullptr;
@@ -28,12 +33,27 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     CCMenuItemSpriteExtra* m_apply = nullptr;
     std::vector<CCMenuItemSpriteExtra*> m_steps;
 
-    // lives(): 생명제 모드, unlimited(): 연습 모드라 시도 제한 없음.
+    // lives(): 생명제 모드, unlimited(): 연습 모드라 시도 제한 없음, clockValue(): 시간제의 고정 시간(m:ss 입력).
     bool lives() const { return m_mode == 0 && !m_practice; }
     bool unlimited() const { return m_mode == 0 && m_practice; }
-    static void caption(CCMenuItemSpriteExtra* item, char const* text, char const* background) {
+    bool clockValue() const { return m_mode == 2 && m_timeType == 0; }
+    // 지금 고른 시간제 값을 담은 규칙(안내 문구와 서버 요청에 쓴다).
+    GameRules timeRules() const {
+        GameRules rules;
+        rules.mode = m_mode;
+        rules.speed = m_speed;
+        rules.timeType = m_timeType;
+        rules.timeSeconds = m_timeSeconds;
+        rules.timePercent = m_timePercent;
+        return rules;
+    }
+    // 버튼 글자/배경을 바꾼다. maxWidth가 있으면 버튼이 그 폭을 넘지 않게 줄인다.
+    static void caption(CCMenuItemSpriteExtra* item, char const* text, char const* background, float maxWidth = 0.f,
+                        float scale = .42f) {
         auto* sprite = ButtonSprite::create(text, "goldFont.fnt", background);
-        sprite->setScale(.42f);
+        float const width = sprite->getContentSize().width;
+        if (maxWidth > 0.f && width * scale > maxWidth) scale = maxWidth / width;
+        sprite->setScale(scale);
         item->setSprite(sprite);
     }
     void onExit() override {
@@ -53,6 +73,7 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         enabled(m_apply, !m_pending);
         enabled(m_modeButton, !m_pending);
         enabled(m_practiceButton, !m_pending);
+        enabled(m_timeButton, !m_pending);
         m_livesInput->setEnabled(!m_pending && !autoOn && !unlimited());
         m_livesInput->getBGSprite()->setOpacity(autoOn ? 105 : 230);
         m_maxInput->setEnabled(!m_pending);
@@ -60,27 +81,56 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     // 현재 값(모드, 연습, 생명/목표, 최대 인원, 속도)을 버튼 문구와 입력창, 안내 문구에 반영한다.
     // 자동 생명이 켜져 있으면 레벨에서 계산한 생명 수를 쓴다.
     void showValues() {
-        caption(m_modeButton, m_mode == 1 ? "Mode: Percent" : "Mode: Attempts", "GJ_button_04.png");
+        bool const timed = m_mode == 2;
+        caption(m_modeButton, modeCaption(m_mode), "GJ_button_04.png", 136.f);
+        placeBetaSticker(m_modeButton, m_beta, timed, .85f);
         caption(m_practiceButton, m_practice ? "Practice: ON" : "Practice: OFF",
-                m_practice ? "GJ_button_01.png" : "GJ_button_04.png");
-        m_valueCaption->setString(m_mode == 1 ? "TARGET % (1-100)" : "LIVES");
+                m_practice ? "GJ_button_01.png" : "GJ_button_04.png", 108.f);
+        // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 그 자리에 시간 방식 버튼을 둔다.
+        caption(m_timeButton, m_timeType == 0 ? "Time: Fixed" : "Time: Map %", "GJ_button_04.png", 108.f);
+        m_practiceButton->setVisible(!timed);
+        m_timeButton->setVisible(timed);
+        m_valueCaption->setString(m_mode == 1   ? "TARGET % (1-100)"
+                                  : !timed      ? "LIVES"
+                                  : clockValue() ? "TIME (0:10-99:59)"
+                                                 : "MAP LENGTH % (1-9999)");
         if (m_autoLives && lives())
             if (auto const value = autoLives(m_level, m_random)) m_attempts = value->lives;
-        m_livesInput->setString(std::to_string(m_mode == 1 ? m_target : m_attempts).c_str());
+        m_livesInput->setFilter(clockValue() ? "0123456789:" : "0123456789");
+        m_livesInput->setMaxCharCount(clockValue() ? 5 : timed ? 4 : 3);
+        m_livesInput->setString(clockValue() ? timeValueText(m_timeSeconds)
+                                             : std::to_string(m_mode == 1 ? m_target
+                                                              : timed     ? m_timePercent
+                                                                          : m_attempts));
         m_livesInput->setVisible(!unlimited());
+        // 값 줄의 큰 증감 버튼: 생명/목표 5, 시간 1분, 맵 비율 50%.
+        for (auto* item : m_steps) {
+            int const tag = item->getTag();
+            if (tag != 3 && tag != 4) continue;
+            bool const less = tag == 3;
+            auto const text = clockValue() ? (less ? "-1m" : "+1m")
+                              : timed      ? (less ? "-50" : "+50")
+                                           : (less ? "-5" : "+5");
+            caption(item, text, "GJ_button_04.png", 0.f, .5f);
+            enabled(item, item->isEnabled());
+        }
         m_unlimited->setVisible(unlimited());
         m_maxInput->setString(std::to_string(m_max).c_str());
         m_speedLabel->setString(speedText(m_speed).c_str());
         m_speedLabel->setColor(m_speed == 100 ? ccWHITE : ccc3(255, 120, 200));
-        for (CCNode* node :
-             {static_cast<CCNode*>(m_auto), static_cast<CCNode*>(m_autoLabel), static_cast<CCNode*>(m_autoHint)})
+        for (CCNode* node : {static_cast<CCNode*>(m_auto), static_cast<CCNode*>(m_autoLabel)})
             node->setVisible(lives());
-        m_autoHint->setString(autoLivesLine(m_autoLives, m_level, m_random, "lives").c_str());
+        // 자동 생명 안내 자리: 시간제는 시간이 끝난 뒤의 규칙이나 이 맵에서의 시간을 알려 준다.
+        m_autoHint->setVisible(lives() || timed);
+        m_autoHint->setString(!timed          ? autoLivesLine(m_autoLives, m_level, m_random, "lives").c_str()
+                              : clockValue()  ? "When the time is up, everyone gets one last attempt"
+                                              : timeLengthLine(timeRules(), m_level, m_random).c_str());
         m_autoHint->limitLabelWidth(260.f, .3f, .1f);
-        m_autoHint->setColor(m_autoLives ? ccc3(150, 255, 175) : kMuted);
-        m_rulesHint->setString(m_mode == 1  ? "The first to reach the target % wins."
-                               : m_practice ? "Practice, no attempt limit: the fewest failed runs to a clear wins."
-                                            : "Best % wins, then fewer failed runs, then coins.");
+        m_autoHint->setColor(timed ? ccc3(255, 205, 140) : m_autoLives ? ccc3(150, 255, 175) : kMuted);
+        m_rulesHint->setString(timed        ? "BETA: best % within the time wins. The first clear takes 1st."
+                               : m_mode == 1 ? "The first to reach the target % wins."
+                               : m_practice  ? "Practice, no attempt limit: the fewest failed runs to a clear wins."
+                                             : "Best % wins, then fewer failed runs, then coins.");
         m_rulesHint->limitLabelWidth(260.f, .5f, .1f);
     }
     // 맵이 아직 추첨 전(풀에서 굴려야 하거나 랜덤 추첨이 확정되지 않음)인지.
@@ -91,7 +141,12 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     // 입력창에 직접 친 값이 유효하면 내부 값으로 옮긴다.
     void keepTyped() {
         int const typed = typedNumber(m_livesInput);
-        if (m_mode == 1) {
+        if (clockValue()) {
+            int const seconds = parseTimeText(std::string(m_livesInput->getString()));
+            if (seconds >= kTimeMinSeconds && seconds <= kTimeMaxSeconds) m_timeSeconds = seconds;
+        } else if (m_mode == 2) {
+            if (typed >= 1 && typed <= kTimePercentMax) m_timePercent = typed;
+        } else if (m_mode == 1) {
             if (typed >= 1 && typed <= 100) m_target = typed;
         } else if (!unlimited() && !m_autoLives && typed >= 1 && typed <= 99)
             m_attempts = typed;
@@ -109,27 +164,50 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         showValues();
         refresh();
     }
+    // 모드 전환 (Attempts -> Percent -> Time -> Attempts). 시간제로 갈 때 연습 규칙을 끄고, 나올 때 되살린다.
     void onMode(CCObject*) {
         if (m_pending) return;
         keepTyped();
-        m_mode = 1 - m_mode;
+        int const next = (m_mode + 1) % 3;
+        if (next == 2) {
+            m_savedPractice = m_practice;
+            m_practice = false;
+        } else if (m_mode == 2)
+            m_practice = m_savedPractice;
+        m_mode = next;
         showValues();
         refresh();
     }
     void onPractice(CCObject*) {
-        if (m_pending) return;
+        if (m_pending || m_mode == 2) return;
         keepTyped();
         m_practice = !m_practice;
         showValues();
         refresh();
     }
-    // +/- 버튼 처리. tag 십의 자리가 대상(0 생명/목표, 1 최대 인원, 2 속도), 일의 자리가 증감량이다.
+    // 시간제의 시간 방식 전환 (Fixed: 정한 시간 / Map %: 맵 길이의 비율).
+    void onTimeType(CCObject*) {
+        if (m_pending || m_mode != 2) return;
+        keepTyped();
+        m_timeType = 1 - m_timeType;
+        showValues();
+        refresh();
+    }
+    // +/- 버튼 처리. tag 십의 자리가 대상(0 생명/목표/시간, 1 최대 인원, 2 속도), 일의 자리가 증감량이다.
+    // 시간제의 고정 시간은 10초/1분씩, 맵 비율은 10%/50%씩 바뀐다.
     void step(CCObject* sender) {
         if (m_pending) return;
         int const tag = sender->getTag();
         int const delta = tag % 10 == 1 ? -1 : tag % 10 == 2 ? 1 : tag % 10 == 3 ? -5 : 5;
         if (tag < 10 && (unlimited() || (m_autoLives && lives()))) return;
-        if (tag < 10 && m_mode == 1)
+        if (tag < 10 && clockValue()) {
+            keepTyped();
+            int const change = delta == 1 || delta == -1 ? 10 * delta : 12 * delta;
+            m_timeSeconds = std::clamp(m_timeSeconds + change, kTimeMinSeconds, kTimeMaxSeconds);
+        } else if (tag < 10 && m_mode == 2) {
+            keepTyped();
+            m_timePercent = std::clamp(m_timePercent + 10 * delta, 1, kTimePercentMax);
+        } else if (tag < 10 && m_mode == 1)
             m_target = std::clamp(m_target + delta, 1, 100);
         else if (tag < 10)
             m_attempts = std::clamp(m_attempts + delta, 1, 99);
@@ -143,7 +221,20 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     void onApply(CCObject*) {
         if (m_pending) return;
         int const typed = typedNumber(m_livesInput), size = typedNumber(m_maxInput);
-        if (m_mode == 1) {
+        if (clockValue()) {
+            int const seconds = parseTimeText(std::string(m_livesInput->getString()));
+            if (seconds < kTimeMinSeconds || seconds > kTimeMaxSeconds) {
+                error("Enter a time from <cy>0:10</c> to <cy>99:59</c> (like 1:30).");
+                return;
+            }
+            m_timeSeconds = seconds;
+        } else if (m_mode == 2) {
+            if (typed < 1 || typed > kTimePercentMax) {
+                error("Enter <cy>1-9999</c>% of the map's length.");
+                return;
+            }
+            m_timePercent = typed;
+        } else if (m_mode == 1) {
             if (typed < 1 || typed > 100) {
                 error("Enter a target of <cy>1-100</c>%.");
                 return;
@@ -166,7 +257,8 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_maxInput->defocus();
         m_pending = true;
         refresh();
-        Service::get().configureGroup(m_attempts, m_max, m_speed, m_autoLives, m_mode, m_practice, m_target,
+        Service::get().configureGroup(m_attempts, m_max, m_speed, m_autoLives, m_mode, m_mode != 2 && m_practice,
+                                      m_target, timeRules(),
                                       [self = Weak<GroupRulesPopup>(this)](bool ok, std::string detail) {
                                           auto owner = self.lock();
                                           if (!owner) return;
@@ -185,9 +277,13 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         geode::addSideArt(m_mainLayer, SideArt::All, SideArtStyle::PopupBlue);
         setTitle("Group Rules", "bigFont.fnt", .62f);
         m_attempts = std::clamp(room.rules.attempts, 1, 99);
-        m_mode = room.rules.mode == 1 ? 1 : 0;
-        m_practice = room.rules.practice;
+        m_mode = std::clamp(room.rules.mode, 0, 2);
+        m_practice = room.rules.practice && m_mode != 2;
+        m_savedPractice = m_practice;
         m_target = std::clamp(room.rules.targetPercent, 1, 100);
+        m_timeType = room.rules.timeType == 1 ? 1 : 0;
+        m_timeSeconds = std::clamp(room.rules.timeSeconds, kTimeMinSeconds, kTimeMaxSeconds);
+        m_timePercent = std::clamp(room.rules.timePercent, 1, kTimePercentMax);
         m_speed = validRuleSpeed(room.rules.speed) ? room.rules.speed : 100;
         m_max = room.maxPlayers;
         m_minimum = std::max<int>(kGroupMinPlayers, static_cast<int>(room.members.size()));
@@ -196,11 +292,16 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_random = toRoll(room);
         m_autoLives = room.rules.autoLives;
         m_modeButton =
-            button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onMode), "Mode: Attempts", {92.f, 270.f}, .42f);
+            button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onMode), "Mode: Attempts", {82.f, 270.f}, .42f);
         m_modeButton->setID("group-rules-mode"_spr);
+        m_beta = betaSticker(.85f);
+        m_modeButton->addChild(m_beta, 5);
         m_practiceButton = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onPractice), "Practice: OFF",
-                                  {210.f, 270.f}, .42f);
+                                  {220.f, 270.f}, .42f);
         m_practiceButton->setID("group-rules-practice"_spr);
+        m_timeButton = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onTimeType), "Time: Fixed",
+                              {220.f, 270.f}, .42f);
+        m_timeButton->setID("group-rules-time-type"_spr);
         auto row = [this](char const* caption, float y, int base, TextInput*& value, int initial, size_t digits,
                           std::function<void(int)> typed) {
             auto* title = label(m_mainLayer, caption, {150.f, y + 24.f}, .34f, 220.f, kIce);
@@ -221,7 +322,12 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
             row("LIVES", 212.f, 0, m_livesInput, m_mode == 1 ? m_target : m_attempts, 3, [self](int value) {
                 auto owner = self.lock();
                 if (!owner) return;
-                if (owner->m_mode == 1) {
+                if (owner->clockValue()) {
+                    int const seconds = parseTimeText(std::string(owner->m_livesInput->getString()));
+                    if (seconds >= kTimeMinSeconds && seconds <= kTimeMaxSeconds) owner->m_timeSeconds = seconds;
+                } else if (owner->m_mode == 2) {
+                    if (value >= 1 && value <= kTimePercentMax) owner->m_timePercent = value;
+                } else if (owner->m_mode == 1) {
                     if (value >= 1 && value <= 100) owner->m_target = value;
                 } else if (owner->lives() && !owner->m_autoLives && value >= 1 && value <= 99)
                     owner->m_attempts = value;
@@ -466,11 +572,20 @@ class GroupSpectatePopup final : public ::versus::DeferredPopup {
         }
         if (battle::resultFinal(state, rules)) {
             color = ccc3(255, 200, 110);
-            return rules.mode == 1 ? "TARGET REACHED" : "NO LIVES LEFT";
+            return rules.mode == 2 ? "TIME'S UP" : rules.mode == 1 ? "TARGET REACHED" : "NO LIVES LEFT";
+        }
+        // 1.0.8 시간제: 마지막 판(빨강), 일시정지(회색), 연습(하늘색) 순으로 알린다.
+        if (rules.mode == 2 && state.lastRun > 0 && state.inAttempt) {
+            color = ccc3(255, 80, 95);
+            return "LAST ATTEMPT";
         }
         if (state.paused) {
-            color = ccc3(255, 230, 90);
+            color = rules.mode == 2 ? ccc3(150, 150, 150) : ccc3(255, 230, 90);
             return "PAUSED";
+        }
+        if (rules.mode == 2 && state.practicing) {
+            color = ccc3(90, 200, 255);
+            return "PRACTICING";
         }
         if (state.inAttempt) {
             color = ccc3(110, 220, 255);
@@ -496,10 +611,21 @@ class GroupSpectatePopup final : public ::versus::DeferredPopup {
             bool const yOut = y.state.forfeited || y.out || y.disqualified;
             if (xOut != yOut) return !xOut;
             if (x.state.cleared != y.state.cleared) return x.state.cleared;
+            // 시간제: 클리어끼리는 먼저 클리어한 쪽이 위
+            if (battle.rules.mode == 2 && x.state.cleared && x.clearedAt != y.clearedAt)
+                return x.clearedAt > 0 && (y.clearedAt == 0 || x.clearedAt < y.clearedAt);
             if (x.state.bestPercent != y.state.bestPercent) return x.state.bestPercent > y.state.bestPercent;
             return x.state.currentPercent > y.state.currentPercent;
         });
         return result;
+    }
+    // 시간제에서 두 좌석이 같은 순위인지(둘 다 남아 있고, 같은 시각에 클리어했거나 둘 다 못 깨고 최고 %가 같다).
+    static bool sameTimeRank(GroupSeat const& a, GroupSeat const& b) {
+        bool const aOut = a.state.forfeited || a.out || a.disqualified;
+        bool const bOut = b.state.forfeited || b.out || b.disqualified;
+        if (aOut || bOut || a.state.cleared != b.state.cleared) return false;
+        return a.state.cleared ? a.clearedAt == b.clearedAt && a.clearedAt > 0
+                               : a.state.bestPercent == b.state.bestPercent;
     }
     // 좌석마다 한 줄(순위, 아이콘, 이름, 상태, 진행도 막대, 최고 %, 생명, 관전 버튼)을 만든다.
     void build(GroupBattle const& battle) {
@@ -580,12 +706,19 @@ class GroupSpectatePopup final : public ::versus::DeferredPopup {
         }
         auto const& battle = *shown;
         if (battle.id != m_battle || m_rows.size() != battle.seats.size()) build(battle);
-        std::string key = fmt::format("{}:{}:{}:{}:{}:{}", battle.releasedAt, battle.finishedAt, battle.winnerUid,
-                                      m_watchClosed, spectated(), canWatch());
+        // 시간제는 남은 시간(초)도 키에 넣어 매초 갱신한다.
+        int64_t const timeLeft =
+            battle.rules.mode == 2 && battle.releasedAt > 0 && battle.timeLimitMs > 0 && battle.finishedAt == 0
+                ? std::max<int64_t>(0, battle.releasedAt + kBattleCountdownMs + battle.timeLimitMs -
+                                           Service::get().serverNow())
+                : -1;
+        std::string key = fmt::format("{}:{}:{}:{}:{}:{}:{}", battle.releasedAt, battle.finishedAt, battle.winnerUid,
+                                      m_watchClosed, spectated(), canWatch(), timeLeft < 0 ? -1 : (timeLeft + 999) / 1000);
         for (auto const& seat : battle.seats)
-            key += fmt::format("|{},{},{},{}{}{}{}{}{}", seat.state.bestPercent, seat.state.currentPercent,
+            key += fmt::format("|{},{},{},{}{}{}{}{}{}{}{}", seat.state.bestPercent, seat.state.currentPercent,
                                seat.state.attemptsUsed, seat.state.cleared, seat.state.forfeited, seat.state.paused,
-                               seat.state.inAttempt, seat.disqualified, seat.out);
+                               seat.state.inAttempt, seat.disqualified, seat.out, seat.state.practicing,
+                               seat.state.lastRun);
         if (key == m_shown) return;
         m_shown = std::move(key);
         auto const& rules = battle.rules;
@@ -609,20 +742,28 @@ class GroupSpectatePopup final : public ::versus::DeferredPopup {
         m_detail->setString(fmt::format("{}{}  |  {} of {} still playing{}",
                                         watching() && !m_watchName.empty() ? m_watchName + "  |  " : std::string(),
                                         battle.level.name, playing, battle.seats.size(),
-                                        (rules.mode == 1  ? fmt::format("  |  first to {}%", rules.targetPercent)
-                                         : rules.practice ? std::string("  |  practice, fewest failed runs")
-                                                          : fmt::format("  |  {} lives", rules.attempts)) +
+                                        (rules.mode == 2 ? fmt::format("  |  time {} (beta){}", timeRuleText(rules),
+                                                                       timeLeft < 0 ? std::string()
+                                                                       : timeLeft > 0
+                                                                           ? "  |  " + timeClockText(timeLeft) + " left"
+                                                                           : std::string("  |  time's up"))
+                                         : rules.mode == 1 ? fmt::format("  |  first to {}%", rules.targetPercent)
+                                         : rules.practice  ? std::string("  |  practice, fewest failed runs")
+                                                           : fmt::format("  |  {} lives", rules.attempts)) +
                                             (rules.speed != 100 ? "  |  " + speedText(rules.speed) : std::string()))
                                 .c_str());
         m_detail->limitLabelWidth(W - 40.f, .42f, .2f);
         if (m_livesHeader) m_livesHeader->setString(rules.mode == 0 && !rules.practice ? "LIVES" : "FAILS");
         auto const ranks = order(battle);
         float const height = m_scroll->m_contentLayer->getContentSize().height;
+        size_t rank = 0;  // 시간제는 같은 기록(클리어 순서 / 최고 %)이 같은 순위를 쓴다
         for (size_t place = 0; place < ranks.size(); ++place) {
             auto const& seat = battle.seats[ranks[place]];
             auto& row = m_rows[ranks[place]];
             row.node->setPosition({4.f, height - 2.f - RowH * (place + 1)});
-            row.rank->setString(fmt::format("{}", place + 1).c_str());
+            if (place == 0 || rules.mode != 2 || !sameTimeRank(battle.seats[ranks[place - 1]], seat))
+                rank = place + 1;
+            row.rank->setString(fmt::format("{}", rank).c_str());
             ccColor3B color;
             row.status->setString(statusOf(seat, rules, color).c_str());
             row.status->setColor(color);
@@ -1367,6 +1508,7 @@ class GroupRoomLayer : public SceneLayer {
                            room.mapSelection.twoPlayer, room.mapSelection.minLikes) +
                fmt::format(":{}", room.startAt) +
                fmt::format(":{}:{}:{}", room.rules.mode, room.rules.practice, room.rules.targetPercent) +
+               fmt::format(":{}:{}:{}", room.rules.timeType, room.rules.timeSeconds, room.rules.timePercent) +
                (room.mapPool ? fmt::format(":pool{}", room.mapPool->maps.size()) : std::string());
     }
     // 시작 카운트다운 남은 초(올림). 숫자가 바뀔 때 시계 소리를 낸다.

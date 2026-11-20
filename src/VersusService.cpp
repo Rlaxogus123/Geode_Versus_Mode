@@ -352,9 +352,14 @@ GameRules parseRules(Json const& value) {
     result.speed = static_cast<int>(intAt(value, "speed", 100));
     if (!validRuleSpeed(result.speed)) result.speed = 100;
     result.autoLives = boolAt(value, "autoLives");
+    result.timeType = intAt(value, "timeType") == 1 ? 1 : 0;
+    result.timeSeconds = static_cast<int>(
+        std::clamp<int64_t>(intAt(value, "timeSeconds", kTimeDefaultSeconds), kTimeMinSeconds, kTimeMaxSeconds));
+    result.timePercent =
+        static_cast<int>(std::clamp<int64_t>(intAt(value, "timePercent", kTimeDefaultPercent), 1, kTimePercentMax));
     return result;
 }
-// 기본값이 아닌 옵션(allowHacks, speed, autoLives)만 JSON에 넣는다.
+// 기본값이 아닌 옵션(allowHacks, speed, autoLives)만 JSON에 넣는다. 시간제의 시간은 시간제이거나 기본값이 아닐 때.
 Json rulesJson(GameRules const& rules) {
     auto value = Json::object();
     value["mode"] = rules.mode;
@@ -365,6 +370,12 @@ Json rulesJson(GameRules const& rules) {
     if (rules.allowHacks) value["allowHacks"] = true;
     if (rules.speed != 100) value["speed"] = rules.speed;
     if (rules.autoLives) value["autoLives"] = true;
+    if (rules.mode == 2 || rules.timeType != 0 || rules.timeSeconds != kTimeDefaultSeconds ||
+        rules.timePercent != kTimeDefaultPercent) {
+        value["timeType"] = rules.timeType;
+        value["timeSeconds"] = rules.timeSeconds;
+        value["timePercent"] = rules.timePercent;
+    }
     return value;
 }
 BattlePlayerState parseBattlePlayer(Json const& value) {
@@ -391,6 +402,8 @@ BattlePlayerState parseBattlePlayer(Json const& value) {
     result.integrityCode = stringAt(value, "integrityCode");
     result.integrityFeatures = stringAt(value, "integrityFeatures");
     result.tps = static_cast<int>(std::clamp<int64_t>(intAt(value, "tps"), 0, 100000));
+    result.practicing = boolAt(value, "practicing");
+    result.lastRun = static_cast<int>(std::clamp<int64_t>(intAt(value, "lastRun"), 0, 1000000));
     return result;
 }
 BattleInfo parseBattle(Json const& source) {
@@ -406,6 +419,7 @@ BattleInfo parseBattle(Json const& source) {
     battle.guestReroll = intAt(source, "guestReroll");
     battle.rerolled = boolAt(source, "rerolled");
     battle.finishedAt = intAt(source, "finishedAt");
+    battle.timeLimitMs = intAt(source, "timeLimitMs");
     battle.host = parseBattlePlayer(source["host"]);
     battle.guest = parseBattlePlayer(source["guest"]);
     return battle;
@@ -435,6 +449,9 @@ Json battlePlayerJson(BattlePlayerState const& player) {
     value["integrityCode"] = player.integrityCode;
     value["integrityFeatures"] = player.integrityFeatures;
     if (player.tps > 0) value["tps"] = player.tps;
+    // 1.0.8: 모든 대결에서 보낸다(서버는 둘이 함께 있거나 함께 없는 보고를 받는다).
+    value["practicing"] = player.practicing;
+    value["lastRun"] = std::clamp(player.lastRun, 0, 1000000);
     return value;
 }
 // 전투 시작 직후의 초기 플레이어 상태 (run 1, 시도 중).
@@ -447,7 +464,39 @@ Json initialBattlePlayer() {
 // 이 플레이어가 더 이상 플레이할 수 없는 상태인지 (포기 / 클리어 / 목숨 소진).
 bool battleTerminal(Json const& player, GameRules const& rules) {
     if (boolAt(player, "forfeited") || boolAt(player, "cleared")) return true;
+    if (rules.mode == 2) return timeLastRunPlayed(parseBattlePlayer(player));
     return rules.mode == 0 && !rules.practice && intAt(player, "attemptsUsed") >= rules.attempts;
+}
+// 시간제의 판정(서버 time_verdict와 같다). 시간 전 클리어(마지막 판이 아닌 판)는 바로 이기고, 아니면 둘 다
+// 끝났을 때 최고 %가 높은 쪽(같으면 무승부), 또는 끝난 쪽이 상대의 최고 %에 더 닿을 수 없을 때.
+static void resolveTimeBattle(Json const& body, BattlePlayerState const& host, BattlePlayerState const& guest,
+                              std::string const& hostUid, std::string const& guestUid, std::string& winner,
+                              bool& draw) {
+    bool const hostFirst = host.cleared && host.lastRun == 0, guestFirst = guest.cleared && guest.lastRun == 0;
+    if (hostFirst || guestFirst) {
+        if (hostFirst && guestFirst)
+            draw = true;
+        else
+            winner = hostFirst ? hostUid : guestUid;
+        return;
+    }
+    auto const released = intAt(std::as_const(body)["launch"], "releasedAt");
+    auto const limit = intAt(std::as_const(body)["battle"], "timeLimitMs");
+    bool const over = released > 0 && limit > 0 && nowMs() >= released + kBattleCountdownMs + limit + 900000;
+    auto done = [over](BattlePlayerState const& player) {
+        return over || player.forfeited || player.cleared || timeLastRunPlayed(player);
+    };
+    auto score = [](BattlePlayerState const& player) { return player.cleared ? 100 : player.bestPercent; };
+    bool const hostDone = done(host), guestDone = done(guest);
+    if (hostDone && guestDone) {
+        if (score(host) == score(guest))
+            draw = true;
+        else
+            winner = score(host) > score(guest) ? hostUid : guestUid;
+    } else if (hostDone && score(guest) > score(host))
+        winner = guestUid;
+    else if (guestDone && score(host) > score(guest))
+        winner = hostUid;
 }
 // 방 JSON(body)의 전투가 끝났는지 판정해, 끝났으면 winnerUid / draw / finishedAt을 채운다.
 // actorUid는 이번 갱신을 일으킨 쪽이다. 판정 순서:
@@ -467,11 +516,14 @@ void resolveBattle(Json& body, std::string const& actorUid) {
     else if (boolAt(guest, "forfeited"))
         winner = hostUid;
     else if (auto const state = parseBattlePlayer(host);
-             battle::pauseRemaining(state, nowMs()) == 0 && !battle::finalByPlay(state, rules))
+             rules.mode != 2 && battle::pauseRemaining(state, nowMs()) == 0 && !battle::finalByPlay(state, rules))
         winner = guestUid;
     else if (auto const state = parseBattlePlayer(guest);
-             battle::pauseRemaining(state, nowMs()) == 0 && !battle::finalByPlay(state, rules))
+             rules.mode != 2 && battle::pauseRemaining(state, nowMs()) == 0 && !battle::finalByPlay(state, rules))
         winner = hostUid;
+    // 시간제: 시간 안의 최고 %.
+    else if (rules.mode == 2)
+        resolveTimeBattle(body, parseBattlePlayer(host), parseBattlePlayer(guest), hostUid, guestUid, winner, draw);
     // 목표 % 모드: 먼저 목표에 도달한 쪽(firstReachedUid)을 기록한다. 상대가 시도 중이 아니면
     // 바로 승리, 시도 중이면 같은 run 안에서 상대도 도달하는지 지켜본다(도달하면 무승부,
     // 그 run이 끝나도록 못 하면 먼저 도달한 쪽 승리).
@@ -3443,8 +3495,8 @@ void Service::configureRules(GameRules rules, Done callback) {
         callback(false, "Only the host can change game rules.");
         return;
     }
-    if ((rules.mode != 0 && rules.mode != 1) || rules.attempts < 1 || rules.attempts > 99 || rules.targetPercent < 1 ||
-        rules.targetPercent > 100 || !validRuleSpeed(rules.speed)) {
+    if (rules.mode < 0 || rules.mode > 2 || rules.attempts < 1 || rules.attempts > 99 || rules.targetPercent < 1 ||
+        rules.targetPercent > 100 || !validRuleSpeed(rules.speed) || !validTimeRules(rules)) {
         callback(false, "Invalid game rules.");
         return;
     }
@@ -3466,9 +3518,10 @@ void Service::configureRules(GameRules rules, Done callback) {
                 newRules = std::as_const(probe)["rules"];
             }
             auto const selection = parseMapSelection(std::as_const(body)["mapSelection"]);
-            if (rules.mode == 1 &&
+            if (rules.mode != 0 &&
                 (boolAt(std::as_const(body)["level"], "platformer") || (selection.random && selection.platformer)))
-                return "Platformer maps do not support Percent mode. Choose Attempts mode first.";
+                return rules.mode == 2 ? "Platformer maps do not support Time mode. Choose Attempts mode first."
+                                       : "Platformer maps do not support Percent mode. Choose Attempts mode first.";
             if (!sameJson(std::as_const(body)["rules"], newRules)) {
                 body["rules"] = newRules;
                 body["hostReady"] = false;
@@ -3820,8 +3873,8 @@ void Service::startMatch(Done callback) {
             auto const room = parseRoom("", body);
             if (needsRandomDraw(room)) return "Complete the roulette first.";
             auto const rules = parseRules(std::as_const(body)["rules"]);
-            if ((rules.mode != 0 && rules.mode != 1) || rules.attempts < 1 || rules.attempts > 99 ||
-                rules.targetPercent < 1 || rules.targetPercent > 100)
+            if (rules.mode < 0 || rules.mode > 2 || rules.attempts < 1 || rules.attempts > 99 ||
+                rules.targetPercent < 1 || rules.targetPercent > 100 || !validTimeRules(rules))
                 return "Invalid game rules. Apply the game rules again.";
             auto launch = Json::object();
             launch["id"] = launchId;
@@ -3866,12 +3919,17 @@ void Service::markLoaded(std::string launchId, Done callback) {
         }
         s.room->launch->hostLoaded = s.room->launch->guestLoaded = true;
         if (s.room->launch->releasedAt <= 0) s.room->launch->releasedAt = nowMs();
+        if (s.room->rules.mode == 2 && s.room->battle && s.room->battle->timeLimitMs <= 0)
+            s.room->battle->timeLimitMs = timeLimitMs(s.room->rules, mapPlaySeconds(s.room->level.id));
         callback(true, {});
         return;
     }
     if (inGroup()) {
         auto body = Json::object();
         body["battle"] = std::move(launchId);
+        // 시간제: 이 게임이 잰 맵 시간으로 정한 길이(서버는 처음 받은 것을 쓴다; 고정이면 규칙의 초).
+        if (auto const& group = state().group; group && group->battle && group->battle->rules.mode == 2)
+            body["timeLimitMs"] = timeLimitMs(group->battle->rules, mapPlaySeconds(group->battle->level.id));
         groupAction("loaded", std::move(body), std::move(callback));
         return;
     }
@@ -3901,6 +3959,11 @@ void Service::markLoaded(std::string launchId, Done callback) {
             if (intAt(launch, "releasedAt") > 0) return boolAt(launch, key) ? "" : "The match has already started.";
             if (nowMs() >= intAt(launch, "requestedAt") + 60000) return "Loading timed out after 60 seconds.";
             launch[key] = true;
+            // 시간제: 먼저 로딩한 쪽이 잰 맵 시간으로 길이를 정한다(고정이면 규칙의 초). 이미 있으면 그대로.
+            if (auto const rules = parseRules(std::as_const(body)["rules"]);
+                rules.mode == 2 && !std::as_const(body)["battle"].contains("timeLimitMs"))
+                body["battle"]["timeLimitMs"] =
+                    timeLimitMs(rules, mapPlaySeconds(intAt(std::as_const(body)["level"], "id")));
             if (boolAt(launch, "hostLoaded") && boolAt(launch, "guestLoaded")) launch["releasedAt"] = timestamp();
             body[host ? "hostSeen" : "guestSeen"] = timestamp();
             return {};
@@ -4079,8 +4142,11 @@ void Service::reportBattle(BattlePlayerState progress, bool sendPosition, Done c
     progress.cleared = current.cleared || progress.cleared;
     progress.userCoins = std::max(progress.userCoins, current.userCoins);
     progress.forfeited = current.forfeited || progress.forfeited;
-    progress.pauseUsedMs =
-        std::clamp<int64_t>(std::max(progress.pauseUsedMs, current.pauseUsedMs), 0, battle::PAUSE_BUDGET_MS);
+    // 시간제는 일시정지 한도가 없어 서버가 적어 둔 사용량이 20초를 넘을 수 있다(서버 상한 30초). 줄여 보내면
+    // 서버가 "Pause budget cannot be restored"로 보고를 거절하므로 그 상한까지 서버 값을 따른다.
+    progress.pauseUsedMs = std::clamp<int64_t>(std::max(progress.pauseUsedMs, current.pauseUsedMs), 0,
+                                               rules.mode == 2 ? battle::PAUSE_VALUE_MAX_MS : battle::PAUSE_BUDGET_MS);
+    if (progress.lastRun == 0) progress.lastRun = current.lastRun;  // 서버가 정한 마지막 판(시간제)
     if (!sendPosition || progress.spectating || !other.spectating) {
         progress.x = current.x;
         progress.y = current.y;
@@ -4157,6 +4223,7 @@ static LiveMatch parseLiveMatch(Json const& entry) {
     match.level = parseLevel(entry["level"]);
     match.rules = parseRules(entry["rules"]);
     match.releasedAt = intAt(entry, "releasedAt");
+    match.timeLimitMs = intAt(entry, "timeLimitMs");
     match.scoreHost = static_cast<int>(intAt(entry["score"], "host"));
     match.scoreGuest = static_cast<int>(intAt(entry["score"], "guest"));
     if (entry["players"].isArray()) {
@@ -4404,6 +4471,7 @@ void Service::fetchLiveMatches(std::function<void(LiveList, std::string)> callba
                     group.level = parseLevel(entry["level"]);
                     group.rules = parseRules(entry["rules"]);
                     group.releasedAt = intAt(entry, "releasedAt");
+                    group.timeLimitMs = intAt(entry, "timeLimitMs");
                     group.count = static_cast<int>(intAt(entry, "count"));
                     group.alive = static_cast<int>(intAt(entry, "alive"));
                     if (entry["top"].isArray())

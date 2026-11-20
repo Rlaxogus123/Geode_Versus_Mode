@@ -55,9 +55,14 @@ int leaderSeat(GroupBattle const& battle) {
     if (battle.ranking.size() == battle.seats.size() && !battle.ranking.empty() && battle.ranking.front() >= 0 &&
         battle.ranking.front() < count)
         return battle.ranking.front();
-    auto better = [](GroupSeat const& x, GroupSeat const& y) {
+    bool const timed = battle.rules.mode == 2;
+    auto better = [timed](GroupSeat const& x, GroupSeat const& y) {
         if (outOf(x) != outOf(y)) return !outOf(x);
         if (x.state.cleared != y.state.cleared) return x.state.cleared;
+        // 시간제: 먼저 클리어한 사람이 앞(서버 시각; 모르면 뒤로).
+        if (timed && x.state.cleared && x.clearedAt != y.clearedAt)
+            return (x.clearedAt > 0 ? x.clearedAt : std::numeric_limits<int64_t>::max()) <
+                   (y.clearedAt > 0 ? y.clearedAt : std::numeric_limits<int64_t>::max());
         if (x.state.bestPercent != y.state.bestPercent) return x.state.bestPercent > y.state.bestPercent;
         return x.state.currentPercent > y.state.currentPercent;
     };
@@ -66,8 +71,13 @@ int leaderSeat(GroupBattle const& battle) {
         if (better(battle.seats[i], battle.seats[best])) best = i;
     return best;
 }
-// 좌석 상태를 문구로 만들고 상태에 맞는 색을 color에 채운다.
-std::string seatStatus(GroupSeat const& seat, GameRules const& rules, ccColor3B& color) {
+// 시간제의 시간이 끝났는지(서버 시각 기준; 시간을 모르면 아니다).
+bool timeIsUp(GroupBattle const& battle) {
+    return battle.rules.mode == 2 && battle.releasedAt > 0 && battle.timeLimitMs > 0 &&
+           Service::get().serverNow() >= battle.releasedAt + kBattleCountdownMs + battle.timeLimitMs;
+}
+// 좌석 상태를 문구로 만들고 상태에 맞는 색을 color에 채운다. timeUp: 시간제의 시간이 끝났다(마지막 판).
+std::string seatStatus(GroupSeat const& seat, GameRules const& rules, ccColor3B& color, bool timeUp = false) {
     auto const& state = seat.state;
     if (seat.disqualified) {
         color = ccc3(255, 90, 90);
@@ -83,11 +93,19 @@ std::string seatStatus(GroupSeat const& seat, GameRules const& rules, ccColor3B&
     }
     if (battle::resultFinal(state, rules)) {
         color = ccc3(255, 200, 110);
-        return rules.mode == 1 ? "TARGET REACHED" : "NO LIVES LEFT";
+        return rules.mode == 2 ? "TIME'S UP" : rules.mode == 1 ? "TARGET REACHED" : "NO LIVES LEFT";
+    }
+    if (rules.mode == 2 && timeUp) {
+        color = ccc3(255, 80, 95);
+        return state.inAttempt ? fmt::format("LAST ATTEMPT - now {}%", state.currentPercent) : "LAST ATTEMPT";
     }
     if (state.paused) {
         color = ccc3(255, 230, 90);
         return "PAUSED";
+    }
+    if (state.practicing != rules.practice) {
+        color = ccc3(90, 200, 255);
+        return "PRACTICING";
     }
     if (state.inAttempt) {
         color = ccc3(110, 220, 255);
@@ -459,10 +477,12 @@ public:
         auto const& state = seat.state;
         auto const& rules = battle->rules;
         bool const lives = rules.mode == 0 && !rules.practice;
+        bool const timeUp = timeIsUp(*battle);
         std::string const key =
-            fmt::format("{}|{}|{}|{},{},{},{}{}{}{}{}{}", seat.profile.uid, battle->finishedAt, battle->draw,
+            fmt::format("{}|{}|{}|{},{},{},{}{}{}{}{}{}|{}{}{}", seat.profile.uid, battle->finishedAt, battle->draw,
                         state.bestPercent, state.currentPercent, state.attemptsUsed, state.cleared, state.forfeited,
-                        state.paused, state.inAttempt, seat.disqualified, seat.out);
+                        state.paused, state.inAttempt, seat.disqualified, seat.out, state.practicing, state.lastRun,
+                        timeUp);
         if (key == shownLeader) return;
         shownLeader = key;
         if (seat.profile.uid != leaderUid) {
@@ -481,7 +501,7 @@ public:
         }
         leaderTitle->setString(battle->finishedAt == 0 ? "LEADER" : battle->draw ? "TOP PLAYER" : "WINNER");
         ccColor3B color;
-        leaderStatus->setString(seatStatus(seat, rules, color).c_str());
+        leaderStatus->setString(seatStatus(seat, rules, color, timeUp).c_str());
         leaderStatus->setColor(color);
         leaderStatus->limitLabelWidth(kLeaderW - 42.f, .42f, .25f);
         int const best = state.cleared ? 100 : std::clamp(state.bestPercent, 0, 100);
@@ -797,6 +817,7 @@ GroupBattle battleOf(LiveMatch const& match) {
     GroupBattle battle;
     battle.id = match.battleId;
     battle.releasedAt = match.releasedAt;
+    battle.timeLimitMs = match.timeLimitMs;
     battle.level = match.level;
     battle.rules = match.rules;
     for (auto const& player : match.players) {

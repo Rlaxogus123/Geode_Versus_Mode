@@ -35,6 +35,8 @@ public:
     void applyLayout();
     // 한쪽 카드에 리롤(REROLL) 알림 줄을 띄운다.
     void showReroll(bool left);
+    // 시간제: 내 카드(왼쪽)의 남은 시간(ms, 음수면 숨김)과 시간이 끝났는지(버저비터 색).
+    void setTime(int64_t leftMs, bool timeUp);
     void update(float dt) override;
 };
 // 카드 투명도 설정(0~100%). own은 내 카드, 아니면 상대 카드.
@@ -86,6 +88,8 @@ public:
     // 내 상태와 그룹 배틀 정보로 선두 카드와 헤더를 갱신한다.
     void updateGroup(BattlePlayerState const& self, GroupBattle const& battle, std::string const& selfUid);
     void setCardOpacity(GLubyte own, GLubyte other);
+    // 시간제: 내 카드의 남은 시간(ms, 음수면 숨김)과 시간이 끝났는지.
+    void setTime(int64_t leftMs, bool timeUp);
     void update(float dt) override;
 };
 }

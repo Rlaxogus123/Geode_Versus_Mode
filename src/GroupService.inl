@@ -28,6 +28,7 @@ GroupBattle parseGroupBattle(Json const& value, GroupBattle const* previous) {
     battle.draw = boolAt(value, "draw");
     battle.level = parseLevel(value["level"]);
     battle.rules = parseRules(value["rules"]);
+    battle.timeLimitMs = intAt(value, "timeLimitMs");
     std::unordered_set<std::string> loaded, out;
     if (value["loaded"].isArray())
         for (auto const& uid : value["loaded"].asArray().unwrap()) loaded.insert(uid.asString().unwrapOr(""));
@@ -52,8 +53,10 @@ GroupBattle parseGroupBattle(Json const& value, GroupBattle const* previous) {
     // 이전 스냅샷과 같은 전투이고 좌석 수가 같을 때만 상태를 승계한다.
     if (previous && previous->id == battle.id && previous->seats.size() == battle.seats.size()) {
         battle.statesFinal = previous->statesFinal;
+        if (battle.timeLimitMs <= 0) battle.timeLimitMs = previous->timeLimitMs;
         for (size_t i = 0; i < battle.seats.size(); ++i) {
             battle.seats[i].state = previous->seats[i].state;
+            battle.seats[i].clearedAt = previous->seats[i].clearedAt;
             battle.seats[i].disqualified = previous->seats[i].disqualified;
             battle.seats[i].loaded = battle.seats[i].loaded || previous->seats[i].loaded;
             battle.seats[i].out = battle.seats[i].out || previous->seats[i].out;
@@ -63,10 +66,12 @@ GroupBattle parseGroupBattle(Json const& value, GroupBattle const* previous) {
 }
 
 // 전투 스냅샷을 GroupBattle에 반영한다. 좌석별 상태는 p[i] 배열 한 줄이며 순서는
-// [사용 시도, 현재%, 최고%, run 번호, flags, 유저 코인, 일시정지 누적 ms, 정지 시작 시각, 정지 seq].
-// flags 비트: 1 시도 중, 2 클리어, 4 포기, 8 관전, 16 일시정지, 32 DQ, 64 로드 완료.
+// [사용 시도, 현재%, 최고%, run 번호, flags, 유저 코인, 일시정지 누적 ms, 정지 시작 시각, 정지 seq,
+//  (1.0.8) 시간제의 마지막 판, 클리어한 서버 시각].
+// flags 비트: 1 시도 중, 2 클리어, 4 포기, 8 관전, 16 일시정지, 32 DQ, 64 로드 완료, 128 연습 모드.
 void applyGroupRows(GroupBattle& battle, Json const& snapshot) {
     battle.releasedAt = intAt(snapshot, "releasedAt");
+    if (auto const limit = intAt(snapshot, "timeLimitMs"); limit > 0) battle.timeLimitMs = limit;
     battle.finishedAt = intAt(snapshot, "finishedAt");
     battle.winnerUid = stringAt(snapshot, "winnerUid");
     battle.draw = boolAt(snapshot, "draw");
@@ -102,6 +107,9 @@ void applyGroupRows(GroupBattle& battle, Json const& snapshot) {
         player.pauseUsedMs = at(6);
         player.pausedAt = at(7);
         player.pauseSeq = at(8);
+        player.practicing = flags & 128;
+        player.lastRun = row.size() > 9 ? static_cast<int>(std::clamp<int64_t>(at(9), 0, 1000000)) : 0;
+        seat.clearedAt = row.size() > 10 ? at(10) : 0;
     }
     // 종료 시각이 있으면 이 스냅샷이 최종 상태다 (이후 추가 폴링 불필요).
     battle.statesFinal = battle.finishedAt > 0;
@@ -154,6 +162,7 @@ void syncGroupRoom() {
             info.winnerUid = battle.winnerUid;
             info.draw = battle.draw;
             info.finishedAt = battle.finishedAt;
+            info.timeLimitMs = battle.timeLimitMs;
             info.hostReturned = info.guestReturned = true;
             info.host = info.guest = own.state;
             room.battle = std::move(info);
@@ -753,9 +762,9 @@ void Service::handOverGroup(std::string uid, Done callback) {
     body["uid"] = std::move(uid);
     groupAction("host", std::move(body), std::move(callback));
 }
-// 방 규칙 변경. 시도 횟수 1~99, 목표 % 1~100, 인원은 허용 범위로 보정하고 속도/모드는 검증한다.
+// 방 규칙 변경. 시도 횟수 1~99, 목표 % 1~100, 인원은 허용 범위로 보정하고 속도/모드/시간제 시간은 검증한다.
 void Service::configureGroup(int attempts, int maxPlayers, int speed, bool autoLives, int mode, bool practice,
-                             int targetPercent, Done callback) {
+                             int targetPercent, GameRules const& time, Done callback) {
     if (!inGroup() || !isHost()) {
         callback(false, "Only the host can change the room.");
         return;
@@ -764,7 +773,10 @@ void Service::configureGroup(int attempts, int maxPlayers, int speed, bool autoL
         callback(false, "Invalid game rules.");
         return;
     }
-    if (mode != 0 && mode != 1) {
+    GameRules check = time;
+    check.mode = mode;
+    check.practice = practice;
+    if (mode < 0 || mode > 2 || !validTimeRules(check)) {
         callback(false, "Invalid game rules.");
         return;
     }
@@ -772,6 +784,14 @@ void Service::configureGroup(int attempts, int maxPlayers, int speed, bool autoL
     body["attempts"] = std::clamp(attempts, 1, 99);
     body["mode"] = mode;
     body["practice"] = practice;
+    // 1.0.8: 시간제의 시간(Fixed / Map %) - 다른 모드에서도 방이 기억한다. 시간제를 쓴 적 없는 방(기본값)에는
+    // 보내지 않는다(서버가 처음 받는 값을 바뀐 규칙으로 보고 모두의 준비를 풀기 때문).
+    if (mode == 2 || time.timeType != 0 || time.timeSeconds != kTimeDefaultSeconds ||
+        time.timePercent != kTimeDefaultPercent) {
+        body["timeType"] = time.timeType;
+        body["timeSeconds"] = time.timeSeconds;
+        body["timePercent"] = time.timePercent;
+    }
     body["targetPercent"] = std::clamp(targetPercent, 1, 100);
     body["maxPlayers"] = std::clamp(maxPlayers, kGroupMinPlayers, kGroupMaxPlayers);
     body["speed"] = speed;

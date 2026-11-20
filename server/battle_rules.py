@@ -13,8 +13,8 @@
 - validate_battle_transition: 보고가 이전 상태에서 올 수 있는 변화인지 검사한다(최고 %는 줄지 않고, 목숨은
   한도를 넘지 않고, 확정된 결과는 바뀌지 않고, 안티치트 감지는 지울 수 없다). 그 뒤 resolve_battle로 결과를
   정하고, 게임이 보낸 결과 필드는 무시하고 서버가 정한 값으로 덮어쓴다.
-- resolve_battle: 승패 판정. 기권/안티치트 > 일시정지 한도 > (퍼센트 모드) 목표 도달 순서 > (목숨 모드) 클리어
-  횟수·목숨·최고 %·유저코인.
+- resolve_battle: 승패 판정. 기권/안티치트 > 일시정지 한도 > (퍼센트 모드) 목표 도달 순서 > (시간 모드) 시간 안의
+  최고 % > (목숨 모드) 클리어 횟수·목숨·최고 %·유저코인.
 - disconnected_side / seat_stale: 한쪽의 소식이 BATTLE_STALE_MS 동안 끊기면 그쪽의 기권으로 처리한다.
 """
 from __future__ import annotations
@@ -34,6 +34,17 @@ PAUSE_VALUE_MAX_MS = 30_000
 
 # 대결이 아직 그 사람을 기다리는 동안 방 신호도 진행 보고도 이만큼 없으면 연결 끊김(기권)으로 본다.
 BATTLE_STALE_MS = 30_000
+
+# 시간 모드(규칙 "mode" 2, 베타). 정해진 시간 안의 최고 %가 이긴다(프랙티스 판은 세지 않고, 일시정지 한도도 없다).
+# 시간이 끝나기 전에 클리어하면 바로 이긴다. 시간이 끝나면 아직 플레이 중인 자리는 마지막 판(버저비터)을 하나씩
+# 받는다: 하고 있던 판, 판과 판 사이였으면 다음 판. 시간은 10초~99:59이고, 출발 카운트다운이 끝난 뒤부터 센다.
+TIME_MIN_MS = 10_000
+TIME_MAX_MS = 5_999_000
+LAST_RUN_EARLY_MS = 2_000      # 시계 차이 때문에 시간이 끝나기 이만큼 전부터 마지막 판을 정할 수 있다
+LAST_RUN_LATE_MS = 6_000       # 이때까지 정하지 않은 자리는 서버가 그때의 판(아니면 다음 판)으로 정한다
+LAST_RUN_MAX_MS = 900_000      # 시간이 끝나고 이만큼 지나면 모든 마지막 판이 끝난 것으로 본다
+# 릴리스(양쪽 로딩 완료) 뒤 게임이 보여 주는 출발 카운트다운.
+LAUNCH_COUNTDOWN_MS = 3_000
 
 # 게임의 안티치트가 보내는 감지 코드. 빈 문자열은 감지 없음.
 INTEGRITY_CODES = {"", "eclipse:enabled",
@@ -102,6 +113,11 @@ PLAYER_KEYS = {
     "cameraX", "cameraY", "updatedAt", "userCoins", "integrityCode", "integrityFeatures",
 }
 PLAYER_KEYS_TPS = PLAYER_KEYS | {"tps"}
+# 1.0.8 게임은 모든 대결에서 "practicing"(지금 프랙티스 모드로 하는 중)과 "lastRun"(시간 모드의 마지막 판 번호,
+# 0 = 아직 없음)도 보낸다.
+PLAYER_KEYS_V108 = PLAYER_KEYS | {"practicing", "lastRun"}
+PLAYER_KEYS_V108_TPS = PLAYER_KEYS_TPS | {"practicing", "lastRun"}
+PLAYER_KEY_SETS = (PLAYER_KEYS, PLAYER_KEYS_TPS, PLAYER_KEYS_V108, PLAYER_KEYS_V108_TPS)
 TPS_MAX = 100_000
 
 
@@ -161,7 +177,7 @@ _PLAYER_POSITION_KEYS = ("x", "y", "cameraX", "cameraY")
 
 # 한 자리의 진행 보고 형식 검사. 매초 들어오는 경로라 require() 대신 바로 검사한다(검사 순서와 문구는 같다).
 def validate_battle_player(value: Any) -> None:
-    if not (isinstance(value, dict) and (value.keys() == PLAYER_KEYS or value.keys() == PLAYER_KEYS_TPS)):
+    if not (isinstance(value, dict) and value.keys() in PLAYER_KEY_SETS):
         raise Denied("Permission denied")
     if "tps" in value and not (is_int(value["tps"]) and 0 <= value["tps"] <= TPS_MAX):
         raise Denied("Permission denied")
@@ -176,6 +192,12 @@ def validate_battle_player(value: Any) -> None:
         raise Denied("Permission denied")
     for key in _PLAYER_BOOL_KEYS:
         if not isinstance(value[key], bool):
+            raise Denied("Permission denied")
+    # 정해진 마지막 판은 지금 하는 판이거나 그 뒤의 판이다.
+    if "lastRun" in value:
+        last = value["lastRun"]
+        if not (isinstance(value["practicing"], bool) and is_int(last) and 0 <= last <= 1_000_000
+                and (last == 0 or value["runNumber"] <= last)):
             raise Denied("Permission denied")
     validate_integrity_features(value["integrityCode"], value["integrityFeatures"])
     pause_seq = value["pauseSeq"]
@@ -199,7 +221,14 @@ def validate_battle_player(value: Any) -> None:
 def validate_battle(value: Any, room: dict[str, Any]) -> None:
     required = {"id", "firstUid", "activeUid", "firstReachedUid", "opponentRunAtFirst", "winnerUid", "draw", "finishedAt", "host", "guest"}
     require(isinstance(value, dict) and required <= set(value) <=
-            required | {"hostReturned", "guestReturned", "hostReroll", "guestReroll", "rerolled"})
+            required | {"hostReturned", "guestReturned", "hostReroll", "guestReroll", "rerolled", "timeLimitMs"})
+    # 시간 모드의 길이(ms). 처음 맵을 다 불러온 자리가 보내므로, 릴리스된 뒤에는 항상 있다.
+    rules = room.get("rules")
+    timed = isinstance(rules, dict) and rules.get("mode") == 2
+    if "timeLimitMs" in value:
+        require(timed and is_int(value["timeLimitMs"]) and TIME_MIN_MS <= value["timeLimitMs"] <= TIME_MAX_MS)
+    else:
+        require(not timed or not room.get("launch", {}).get("releasedAt", 0))
     # 각 자리의 마지막 Reroll 투표 시각(서버 시각, 0 = 없음)과 둘 다 리롤한 대결 표시.
     for key in ("hostReroll", "guestReroll"):
         require(is_int(value.get(key, 0)) and value.get(key, 0) >= 0)
@@ -221,11 +250,79 @@ def validate_battle(value: Any, room: dict[str, Any]) -> None:
         require((value["draw"] and value["winnerUid"] == "") or (not value["draw"] and value["winnerUid"] in participants))
 
 
-# 이 자리의 플레이가 끝났는지: 기권, 클리어, 또는 (목숨 모드) 목숨을 다 씀.
+# 시간 모드의 시간이 끝나는 시각(서버 ms): 릴리스 + 출발 카운트다운 + 시간. 아직 릴리스 전이면 0.
+def time_deadline(room: dict[str, Any]) -> int:
+    launch = room.get("launch")
+    released = launch.get("releasedAt", 0) if isinstance(launch, dict) else 0
+    limit = room["battle"].get("timeLimitMs", 0)
+    if not is_int(released) or released <= 0 or not is_int(limit) or limit <= 0:
+        return 0
+    return released + LAUNCH_COUNTDOWN_MS + limit
+
+
+# 시간 모드에서 이 자리가 끝났는지: 클리어, 기권, 또는 마지막 판을 다 함.
+def time_done(player: dict[str, Any]) -> bool:
+    return bool(player["forfeited"] or player["cleared"] or (
+        player.get("lastRun", 0) > 0 and player["runNumber"] >= player["lastRun"] and not player["inAttempt"]))
+
+
+# 시간 모드의 점수: 최고 %(프랙티스 판은 올리지 못한다). 클리어는 100.
+def time_score(player: dict[str, Any]) -> int:
+    return 100 if player["cleared"] else player["bestPercent"]
+
+
+# 시간 모드의 보고가 바꿀 수 있는 것. 마지막 판은 시간이 끝났을 때 한 번만 정한다: 하고 있던 판(프랙티스였으면
+# 다시 시작한 판), 판과 판 사이였으면 다음 판. 그 뒤의 판은 없다. 시간이 끝나고 LAST_RUN_LATE_MS가 지나도록
+# 정하지 않은 자리는 서버가 그 판으로 정한다(그 뒤로 바뀌지 않는다).
+def time_transition(room: dict[str, Any], current: dict[str, Any], proposed: dict[str, Any], stamp: int) -> None:
+    deadline = time_deadline(room)
+    require(deadline > 0 and "lastRun" in proposed, "Update Versus to play this battle.")
+    before = current.get("lastRun", 0)
+    if before:
+        if proposed["lastRun"] == 0:
+            proposed["lastRun"] = before
+        require(proposed["lastRun"] == before, "The last run cannot change")
+    elif proposed["lastRun"]:
+        require(stamp >= deadline - LAST_RUN_EARLY_MS, "The time is not up yet")
+        require(proposed["lastRun"] == proposed["runNumber"] or
+                (proposed["lastRun"] == proposed["runNumber"] + 1 and not proposed["inAttempt"]))
+    elif stamp >= deadline + LAST_RUN_LATE_MS:
+        proposed["lastRun"] = proposed["runNumber"] + (0 if proposed["inAttempt"] else 1)
+    require(proposed["lastRun"] == 0 or proposed["runNumber"] <= proposed["lastRun"], "The time is up")
+
+
+# 시간 모드의 결과(("", False) = 아직 없음). 시간이 끝나기 전의 클리어(마지막 판이 아닌 판)는 바로 이긴다.
+# 아니면 두 자리가 다 끝났을 때 점수가 높은 쪽이 이기고 같으면 무승부다(유저코인·실패 횟수는 보지 않는다).
+# 끝난 자리가 상대의 최고 %에 더는 닿을 수 없으면 바로 정한다. 시간이 끝나고 LAST_RUN_MAX_MS가 지나면
+# 모든 마지막 판이 끝난 것으로 본다.
+def time_verdict(room: dict[str, Any], stamp: int) -> tuple[str, bool]:
+    battle = room["battle"]
+    host_uid, guest_uid = room["host"]["uid"], room["guest"]["uid"]
+    host, guest = battle["host"], battle["guest"]
+    host_first = host["cleared"] and not host.get("lastRun", 0)
+    guest_first = guest["cleared"] and not guest.get("lastRun", 0)
+    if host_first or guest_first:
+        return ("", True) if host_first and guest_first else (host_uid if host_first else guest_uid, False)
+    deadline = time_deadline(room)
+    over = deadline > 0 and stamp >= deadline + LAST_RUN_MAX_MS
+    host_done, guest_done = over or time_done(host), over or time_done(guest)
+    host_score, guest_score = time_score(host), time_score(guest)
+    if host_done and guest_done:
+        if host_score == guest_score:
+            return "", True
+        return (host_uid if host_score > guest_score else guest_uid), False
+    if host_done and guest_score > host_score:
+        return guest_uid, False
+    if guest_done and host_score > guest_score:
+        return host_uid, False
+    return "", False
+
+
+# 이 자리의 플레이가 끝났는지: 기권, 클리어, (목숨 모드) 목숨을 다 씀, 또는 (시간 모드) 마지막 판을 다 함.
 def battle_terminal(player: dict[str, Any], rules: dict[str, Any]) -> bool:
     return bool(player["forfeited"] or player["cleared"] or (
         rules["mode"] == 0 and not rules["practice"] and player["attemptsUsed"] >= rules["attempts"]
-    ))
+    ) or (rules["mode"] == 2 and time_done(player)))
 
 
 # 목숨 모드의 조기 승리. attemptsUsed는 실패한 판 수다. 클리어한 쪽보다 상대가 이미 더 많이 실패했으면 상대는
@@ -267,13 +364,15 @@ def pause_expired(player: dict[str, Any], stamp: int) -> bool:
     return player.get("pauseUsedMs", 0) + elapsed >= PAUSE_BUDGET_MS
 
 
-# 플레이로 결과가 이미 확정된 자리(클리어, 목숨 소진, 목표 % 도달). 그 뒤의 일시정지 초과, 나가기, 연결 끊김은
-# 이 자리를 패배로 바꾸지 못한다.
+# 플레이로 결과가 이미 확정된 자리(클리어, 목숨 소진, 목표 % 도달, 시간 모드의 마지막 판 끝). 그 뒤의 일시정지
+# 초과, 나가기, 연결 끊김은 이 자리를 패배로 바꾸지 못한다.
 def final_by_play(player: dict[str, Any], rules: dict[str, Any]) -> bool:
     if player["forfeited"]:
         return False
     if player["cleared"]:
         return True
+    if rules["mode"] == 2:
+        return time_done(player)
     if rules["mode"] == 0 and not rules["practice"] and player["attemptsUsed"] >= rules["attempts"]:
         return True
     return rules["mode"] == 1 and race_reached(player) >= rules["targetPercent"]
@@ -284,8 +383,9 @@ def race_reached(player: dict[str, Any]) -> int:
     return 100 if player["cleared"] else max(player["bestPercent"], player["currentPercent"])
 
 
+# 일시정지 한도를 넘겨서 지는지. 시간 모드에는 한도가 없다(시간은 계속 흐른다).
 def pause_lost(player: dict[str, Any], rules: dict[str, Any], stamp: int) -> bool:
-    return pause_expired(player, stamp) and not final_by_play(player, rules)
+    return rules["mode"] != 2 and pause_expired(player, stamp) and not final_by_play(player, rules)
 
 
 # 실제 서버에서는 마지막으로 본 시각을 서버 장애가 끝난 시각 아래로 내려가지 않게 보정한다(서버가 멈춘 동안은
@@ -461,6 +561,9 @@ def resolve_battle(room: dict[str, Any], actor_uid: str, stamp: int, spectate: b
         winner = guest_uid
     elif pause_lost(guest, rules, stamp):
         winner = host_uid
+    elif rules["mode"] == 2:
+        # 시간 모드: time_verdict.
+        winner, draw = time_verdict(room, stamp)
     elif rules["mode"] == 1:
         # 퍼센트 모드: 목표 %에 먼저 닿은 쪽. 보고한 쪽의 보고는 보고한 쪽만 움직일 수 있으므로, 이미 목표에 서
         # 있는 자리가 먼저 간 것으로 본다(그 도달이 죽음 보고 안에 묻혀 왔을 수 있다). 도달 = 최고 %, 진행 중인
@@ -552,13 +655,15 @@ def initial_player(playing: bool = True, spectator: bool = False) -> dict[str, A
     }
 
 
-# 결과가 확정된 자리(클리어, 목숨 소진, 목표 도달, 기권)는 관전 모드로 맵을 계속 할 수 있지만, 그 뒤 보고가
-# 결과를 바꾸지는 못한다.
+# 결과가 확정된 자리(클리어, 목숨 소진, 목표 도달, 시간 모드의 마지막 판 끝, 기권)는 관전 모드로 맵을 계속 할
+# 수 있지만, 그 뒤 보고가 결과를 바꾸지는 못한다.
 def result_locked(player: dict[str, Any], rules: dict[str, Any]) -> bool:
     if player["forfeited"] or player["cleared"]:
         return True
     if rules["mode"] == 0 and not rules["practice"] and player["attemptsUsed"] >= rules["attempts"]:
         return True
+    if rules["mode"] == 2:
+        return time_done(player)
     return rules["mode"] == 1 and player["bestPercent"] >= rules["targetPercent"]
 
 
@@ -582,6 +687,9 @@ def validate_battle_transition(room: dict[str, Any], candidate: dict[str, Any], 
     rules = seat_rules(room, side, spectate)
     # 되돌릴 수 없는 것들: 실패 횟수, 판 번호, 최고 %, 유저코인, 클리어, 기권, 안티치트 감지.
     require(proposed["attemptsUsed"] >= current["attemptsUsed"] and proposed["runNumber"] >= current["runNumber"])
+    # 시간 모드의 마지막 판.
+    if rules["mode"] == 2:
+        time_transition(room, current, proposed, stamp)
     if result_locked(current, rules):
         for key in RESULT_LOCKED_KEYS:
             require(proposed[key] == current[key], "Result already locked")

@@ -15,6 +15,7 @@
 #include <optional>
 #include <utility>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace versus {
@@ -116,7 +117,9 @@ struct LaunchInfo {
     bool hostLoaded = false;
     bool guestLoaded = false;
 };
-// 전투 규칙. mode 0은 목숨제(attempts), 1은 목표 퍼센트제(targetPercent). speed는 % 단위(50~300, 25 간격).
+// 전투 규칙. mode 0은 목숨제(attempts), 1은 목표 퍼센트제(targetPercent), 2는 시간제(Time, 베타).
+// speed는 % 단위(50~300, 25 간격). 시간제의 시간은 고정(timeType 0, timeSeconds초) 또는 맵 길이의
+// timePercent%(timeType 1)이며, 다른 모드에서도 값은 그대로 둔다(방이 기억한다).
 struct GameRules {
     int mode = 0;
     int attempts = 3;
@@ -125,13 +128,75 @@ struct GameRules {
     bool allowHacks = false;
     int speed = 100;
     bool autoLives = false;
+    int timeType = 0;
+    int timeSeconds = 90;
+    int timePercent = 150;
     bool operator==(GameRules const&) const = default;
     // 목숨제 + 연습 아님일 때만 목숨 수가 맵 길이를 따라간다 (autoLives).
     bool livesFollowMap() const { return autoLives && mode == 0 && !practice; }
+    bool timed() const { return mode == 2; }
 };
 // 허용되는 게임 속도인지 검사.
 inline bool validRuleSpeed(int speed) {
     return speed >= 50 && speed <= 300 && speed % 25 == 0;
+}
+// 시간제의 범위(서버 versus_server.TIME_*와 같다). 시간은 10초~99:59, 맵 길이 비율은 1~9999%.
+inline constexpr int kTimeMinSeconds = 10, kTimeMaxSeconds = 5999, kTimeDefaultSeconds = 90;
+inline constexpr int kTimePercentMax = 9999, kTimeDefaultPercent = 150;
+// 릴리스 뒤 출발 카운트다운(ms). 시간제의 시간은 이 카운트다운이 끝난 뒤부터 센다.
+inline constexpr int64_t kBattleCountdownMs = 3000;
+// 시간제 규칙 값이 서버가 받는 범위인지.
+inline bool validTimeRules(GameRules const& rules) {
+    return (rules.timeType == 0 || rules.timeType == 1) && rules.timeSeconds >= kTimeMinSeconds &&
+           rules.timeSeconds <= kTimeMaxSeconds && rules.timePercent >= 1 && rules.timePercent <= kTimePercentMax &&
+           (rules.mode != 2 || !rules.practice);
+}
+// 시간제 전투의 길이(ms). 고정이면 규칙의 초, 맵 비율이면 맵 플레이 시간(초, 모르면 0 이하)의 비율을 방 속도로
+// 나눈 값. 항상 10초~99:59 (맵 길이를 모르면 1:30).
+inline int64_t timeLimitMs(GameRules const& rules, double mapSeconds) {
+    if (rules.timeType == 0) return static_cast<int64_t>(std::clamp(rules.timeSeconds, kTimeMinSeconds, kTimeMaxSeconds)) * 1000;
+    if (!(mapSeconds > 0.)) return kTimeDefaultSeconds * 1000;
+    double const speed = validRuleSpeed(rules.speed) ? rules.speed / 100. : 1.;
+    double const ms = mapSeconds * 1000. * rules.timePercent / 100. / speed;
+    return static_cast<int64_t>(std::clamp(ms, kTimeMinSeconds * 1000., kTimeMaxSeconds * 1000.));
+}
+// 두 자리 숫자(앞에 0).
+inline std::string twoDigits(int64_t value) {
+    return (value < 10 ? "0" : "") + std::to_string(value);
+}
+// 남은 시간을 mm:ss로 (초는 올림: 0.2초 남으면 00:01, 99:59를 넘지 않는다).
+inline std::string timeClockText(int64_t ms) {
+    int64_t const seconds = std::clamp<int64_t>((std::max<int64_t>(0, ms) + 999) / 1000, 0, kTimeMaxSeconds);
+    return twoDigits(seconds / 60) + ":" + twoDigits(seconds % 60);
+}
+// 초를 m:ss로 ("1:30", 분은 앞에 0을 붙이지 않는다).
+inline std::string timeValueText(int seconds) {
+    seconds = std::max(0, seconds);
+    return std::to_string(seconds / 60) + ":" + twoDigits(seconds % 60);
+}
+// 규칙 줄에 쓰는 시간 설정 문구: "1:30" 또는 "150% of map".
+inline std::string timeRuleText(GameRules const& rules) {
+    if (rules.timeType == 1) return std::to_string(rules.timePercent) + "% of map";
+    return timeValueText(rules.timeSeconds);
+}
+// 규칙 창에 친 시간을 초로 읽는다: "90"(초), "1:30", "01:30"(초는 두 자리). 형식이 틀리면 -1.
+inline int parseTimeText(std::string_view text) {
+    auto digits = [](std::string_view part, int& out) {
+        if (part.empty() || part.size() > 4) return false;
+        out = 0;
+        for (char c : part) {
+            if (c < '0' || c > '9') return false;
+            out = out * 10 + (c - '0');
+        }
+        return true;
+    };
+    int minutes = 0, seconds = 0;
+    auto const colon = text.find(':');
+    if (colon == std::string_view::npos) return digits(text, seconds) ? seconds : -1;
+    auto const tail = text.substr(colon + 1);
+    if (!digits(text.substr(0, colon), minutes) || tail.size() != 2 || !digits(tail, seconds) || seconds > 59)
+        return -1;
+    return minutes * 60 + seconds;
 }
 // 맵 정보에서 자동 목숨 수를 계산한다.
 int autoRoomLives(LevelInfo const& level);
@@ -167,7 +232,14 @@ struct BattlePlayerState {
     std::string integrityCode;
     std::string integrityFeatures;
     int tps = 0;
+    // 1.0.8: 지금 GD의 연습 모드로 하는 중인지, 시간제의 마지막 판 번호(0 = 아직 없음).
+    bool practicing = false;
+    int lastRun = 0;
 };
+// 시간제: 이 자리의 마지막 판이 끝났는지(클리어/포기는 따로 본다).
+inline bool timeLastRunPlayed(BattlePlayerState const& player) {
+    return player.lastRun > 0 && player.runNumber >= player.lastRun && !player.inAttempt;
+}
 // 게임 기준 TPS와 기록 목록 길이 제한 (일반 / 관리자).
 inline constexpr int kGameTps = 240;
 inline constexpr size_t kHistoryLimit = 100;
@@ -223,6 +295,7 @@ struct BattleInfo {
     int64_t hostReroll = 0, guestReroll = 0;
     bool rerolled = false;
     int64_t finishedAt = 0;
+    int64_t timeLimitMs = 0;  // 시간제의 길이(ms, 첫 로딩 때 정해진다; 0 = 없음)
     BattlePlayerState host;
     BattlePlayerState guest;
 };
@@ -284,6 +357,7 @@ struct GroupSeat {
     BattlePlayerState state;
     bool loaded = false, disqualified = false;
     bool out = false;
+    int64_t clearedAt = 0;  // 시간제: 서버가 본 클리어 시각(클리어 순서)
 };
 // Group 전투 전체 상태. ranking / first는 좌석 인덱스 목록이며 statesFinal이면 최종 상태를 받은 것이다.
 struct GroupBattle {
@@ -296,6 +370,7 @@ struct GroupBattle {
     std::vector<GroupSeat> seats;
     std::vector<int> ranking;
     std::vector<int> first;
+    int64_t timeLimitMs = 0;  // 시간제의 길이(ms)
     bool statesFinal = false;
     int seatOf(std::string const& uid) const {
         for (size_t i = 0; i < seats.size(); ++i)
@@ -606,6 +681,7 @@ struct LiveMatch {
     LevelInfo level;
     GameRules rules;
     int64_t releasedAt = 0;
+    int64_t timeLimitMs = 0;
     int scoreHost = 0, scoreGuest = 0;
     std::array<LivePlayer, 2> players;
 };
@@ -616,6 +692,7 @@ struct LiveGroup {
     LevelInfo level;
     GameRules rules;
     int64_t releasedAt = 0;
+    int64_t timeLimitMs = 0;
     int count = 0, alive = 0;
     std::vector<LivePlayer> top;
     std::vector<std::string> names;
@@ -922,8 +999,9 @@ public:
     void joinGroup(std::string id, std::string pin, Done callback);
     void kickGroupMember(std::string uid, bool ban, Done callback);
     void handOverGroup(std::string uid, Done callback);
+    // time: 시간제의 timeType / timeSeconds / timePercent만 쓴다.
     void configureGroup(int attempts, int maxPlayers, int speed, bool autoLives, int mode, bool practice,
-                        int targetPercent, Done callback);
+                        int targetPercent, GameRules const& time, Done callback);
     void stopGroupStart(Done callback);
     void markGroupResultShown(std::string battleId);
     bool groupResultShown(std::string const& battleId) const;

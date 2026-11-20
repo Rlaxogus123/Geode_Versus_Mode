@@ -385,6 +385,12 @@ public:
     double lastLevelTime = -1.0;
     int stillFrames = 0, movingFrames = 0;
     float resultHold = 0.f;
+    // 1.0.8 시간제(Time, 베타): 시간이 끝나는 서버 시각(모르면 0), 시간이 끝나 마지막 판(버저비터)에 들어갔는지,
+    // 째깍 소리를 낸 마지막 남은 초, 이번 판이 연습 판인지(기록·최고 %·리플레이에 넣지 않는다),
+    // 연습 클리어 뒤 다시 시작하기까지 남은 시간.
+    bool timed = false, buzzer = false, runPractice = false;
+    int64_t timeDeadline = 0, tickSecond = -1;
+    float practiceRestart = 0.f;
 
     inline static Session* instance = nullptr;
     static Session* peek() { return instance; }
@@ -436,9 +442,24 @@ public:
     std::string otherName() const { return host ? guestProfile.name : hostProfile.name; }
     // 게임 진행과 입력을 막아야 하는 상태(종료, 퇴장, 관전, 실격).
     bool blocked() const { return finished || leaving || (spectating && !freePlay) || !integrityReason.empty(); }
-    // 지금 일시 정지가 허용되는지. 사망한 시도 사이에만 허용된다(free play는 자유).
+    // 시간제에서 시간이 끝나기 전: 연습 전환, 재시작, 일시정지가 자유롭다(일시정지 한도도 없다).
+    bool timeFree() const {
+        return timed && !buzzer && active && !releasing && !finished && !leaving && !done() &&
+               integrityReason.empty();
+    }
+    // 시간제가 끝나는 서버 시각(방의 릴리스 + 출발 카운트다운 + 시간, 모르면 0).
+    int64_t roomDeadline() const {
+        auto const& room = Service::get().room();
+        if (!timed || !room || !room->launch || !room->battle || room->battle->id != battleID) return timeDeadline;
+        auto const released = room->launch->releasedAt;
+        auto const limit = room->battle->timeLimitMs;
+        return released > 0 && limit > 0 ? released + kBattleCountdownMs + limit : timeDeadline;
+    }
+    // 지금 일시 정지가 허용되는지. 사망한 시도 사이에만 허용된다(free play는 자유). 시간제는 시간이 끝나기 전이면
+    // 언제든, 마지막 판(버저비터)에는 안 된다.
     bool canPause(PlayLayer* layer) const {
         if (freePlay) return !releasing && !finished && !leaving;
+        if (timed) return timeFree() && !layer->m_hasCompletedLevel;
         bool const dead = layer->m_playerDied || (layer->m_player1 && layer->m_player1->m_isDead) ||
                           (layer->m_gameState.m_isDualMode && layer->m_player2 && layer->m_player2->m_isDead);
         return !releasing && !blocked() && !layer->m_hasCompletedLevel && canPauseBetweenAttempts(local, dead);
@@ -638,6 +659,14 @@ public:
         local.spectating = false;
         local.inAttempt = true;
         local.runNumber = std::max(1, local.runNumber);
+        local.practicing = rules.practice;
+        timed = rules.mode == 2;
+        timeDeadline = 0;
+        tickSecond = -1;
+        runPractice = false;
+        practiceRestart = 0.f;
+        buzzer = timed && local.lastRun > 0;  // (다시 붙은 세션: 서버가 이미 마지막 판을 알고 있다)
+        timeDeadline = roomDeadline();
         releasing = true;
         if (layer->m_isPracticeMode != rules.practice) layer->togglePracticeMode(rules.practice);
         releasing = false;
@@ -732,8 +761,51 @@ public:
         spectateHUD = nullptr;
         spectateShown = false;
     }
-    // free play 중에만 연습 모드를 바꿀 수 있다.
-    bool practiceSwitchable() const { return freePlay && active && !releasing && !finished && !leaving; }
+    // free play 중에만 연습 모드를 바꿀 수 있다(시간제는 시간이 끝나기 전에도).
+    bool practiceSwitchable() const {
+        return (freePlay && active && !releasing && !finished && !leaving) || timeFree();
+    }
+    // 시간제: 시간이 끝났다 - 마지막 판(버저비터)을 정한다. 일시정지는 풀고 이어서 하고, 연습 중이면 연습을 끄고
+    // 처음부터 다시 시작한 판이, 죽어서 다음 판을 기다리는 중이면 그 다음 판이 마지막이다.
+    void enterBuzzer(PlayLayer* owner) {
+        if (buzzer) return;
+        if (owner->m_isPaused) dismissPause(owner);
+        bool const playing = !local.forfeited && !local.cleared && !done() && !freePlay;
+        if (playing && (owner->m_isPracticeMode || runPractice)) {
+            int const before = local.runNumber;
+            if (owner->m_isPracticeMode) owner->togglePracticeMode(false);
+            if (local.runNumber == before) owner->resetLevelFromStart();
+        }
+        buzzer = true;
+        practiceRestart = 0.f;
+        if (!playing || local.lastRun > 0) return;
+        local.lastRun = local.inAttempt ? local.runNumber : local.runNumber + 1;
+        log::info("Versus time: the time is up - run {} is the last (now in run {}, {})", local.lastRun,
+                  local.runNumber, local.inAttempt ? "playing" : "between runs");
+        dirty = true;
+        reportTimer = 0.f;
+    }
+    // 시간제: 남은 시간을 갱신하고 째깍 소리(30초에 한 번, 5초부터 매초)를 내며 시간이 끝나면 버저비터에 들어간다.
+    void updateTime(PlayLayer* owner, int64_t now) {
+        if (!timed) return;
+        timeDeadline = roomDeadline();
+        if (timeDeadline <= 0) {
+            if (!buzzer && local.lastRun > 0) enterBuzzer(owner);
+            return;
+        }
+        auto const left = timeDeadline - now;
+        int64_t const second = left > 0 ? (left + 999) / 1000 : 0;
+        if (second != tickSecond) {
+            if (tickSecond >= 0 && second > 0 && (second == 30 || second <= 5)) audio::play(audio::Cue::Clock);
+            tickSecond = second;
+        }
+        if (!buzzer && (left <= 0 || local.lastRun > 0)) enterBuzzer(owner);  // (또는 서버가 마지막 판을 정했다)
+        // 연습 판 안에서는 지금 %를 0으로 보낸다(연습은 기록에 들어가지 않는다).
+        if (!freePlay && local.inAttempt && local.currentPercent != 0 && (runPractice || owner->m_isPracticeMode)) {
+            local.currentPercent = 0;
+            dirty = true;
+        }
+    }
     // 규칙의 연습 모드 설정으로 되돌린다.
     void restorePractice() {
         auto owner = play.lock();
@@ -992,11 +1064,15 @@ public:
     // 사망 처리: 시도를 마감하고 서버에 보낼 사망 상태를 보관한다. 더 이상 시도할 수 없으면 free play로 들어간다.
     void death(PlayLayer* layer, char const* how = "death") {
         if (!owns(layer) || releasing || !local.inAttempt || blocked()) return;
-        if (!finishAttempt(local, localRules(), percent(layer))) return;
-        replay::endAttempt(local.currentPercent, replay::End::Death);
-        runBest = std::max(runBest, local.currentPercent);
-        saveAttempt();
-        logRun(how);
+        // 시간제의 연습 판은 0%로 끝난다(최고 %, 기록, 리플레이에 들어가지 않는다).
+        bool const practiceRun = timed && (runPractice || layer->m_isPracticeMode);
+        if (!finishAttempt(local, localRules(), practiceRun ? 0 : percent(layer))) return;
+        if (!practiceRun) {
+            replay::endAttempt(local.currentPercent, replay::End::Death);
+            runBest = std::max(runBest, local.currentPercent);
+            saveAttempt();
+        }
+        logRun(practiceRun ? "practice run" : how);
         pendingDeath = local;
         pendingDeathSends = 0;
         dirty = true;
@@ -1014,6 +1090,17 @@ public:
             return;
         }
         if (!owns(layer) || local.cleared || finished || leaving || spectating || !integrityReason.empty()) return;
+        if (timed && (runPractice || layer->m_isPracticeMode)) {
+            // 시간제의 연습 클리어는 세지 않는다: 그 판은 0%로 끝나고 잠시 뒤 처음부터 다시 시작한다.
+            if (local.inAttempt) {
+                finishAttempt(local, localRules(), 0);
+                logRun("practice clear");
+                dirty = true;
+                reportTimer = 0.f;
+            }
+            practiceRestart = 1.5f;
+            return;
+        }
         local.currentPercent = 100;
         local.bestPercent = 100;
         local.cleared = true;
@@ -1035,10 +1122,11 @@ public:
         if (!owns(layer) || releasing) return true;
         if (freePlay) return true;
         if (blocked() || done()) return false;
+        if (timed && buzzer && local.inAttempt) return false;  // 시간제의 마지막 판은 다시 시작할 수 없다
         if (local.inAttempt) death(layer, "restart");
         if (freePlay) return true;
         if (done()) return false;
-        replay::prepareAttempt(layer, local.runNumber + 1);
+        if (!(timed && layer->m_isPracticeMode)) replay::prepareAttempt(layer, local.runNumber + 1);
         return true;
     }
     // 리셋 후: 새 시도를 시작(시도 번호, 퍼센트 초기화)한다.
@@ -1056,11 +1144,13 @@ public:
         spectating = false;
         ++local.runNumber;
         runBest = 0;
+        runPractice = timed && layer->m_isPracticeMode;
+        practiceRestart = 0.f;
         dirty = true;
         reportTimer = 0.f;
         runStarted = Clock::now();
         runSimulated = 0.f;
-        replay::beginAttempt(layer, local.runNumber);
+        if (!runPractice) replay::beginAttempt(layer, local.runNumber);
     }
     // 일시 정지 상태 변화를 기록하고 서버에 알린다. 예산을 다 쓰면 포기 처리한다.
     void pause(PlayLayer* layer, bool value) {
@@ -1073,7 +1163,7 @@ public:
             local.pausedAt = now;
         } else
             consumePause(local, now);
-        if (pauseRemaining(local, now) == 0) {
+        if (!timed && pauseRemaining(local, now) == 0) {
             forfeit(false);
             return;
         }
@@ -1099,6 +1189,12 @@ public:
                 timer->setPosition({size.width - 69.f, size.height - 23.f});
                 timer->setScale(.45f);
                 pause->addChild(timer, 100);
+            }
+            if (timed) {  // 시간제: 일시정지 한도 대신 대결의 남은 시간
+                auto const left = timeDeadline > 0 ? timeDeadline - now : 0;
+                timer->setString(timeClockText(left).c_str());
+                timer->setColor(left <= 10000 ? ccc3(255, 95, 80) : ccWHITE);
+                continue;
             }
             auto remaining = pauseRemaining(local, now);
             timer->setString(fmt::format("{:.1f}s", remaining / 1000.).c_str());
@@ -1130,7 +1226,7 @@ public:
     }
     // 일시 정지 버튼을 길게 눌러 일시 정지를 얻을 수 있는 상태인지(시도 중이고 지금은 일시 정지가 막혀 있을 때).
     bool canHoldPause(PlayLayer* layer) const {
-        return !freePlay && !releasing && !blocked() && !layer->m_hasCompletedLevel && !layer->m_isPaused &&
+        return !timed && !freePlay && !releasing && !blocked() && !layer->m_hasCompletedLevel && !layer->m_isPaused &&
                local.inAttempt && !local.paused && !canPause(layer) &&
                pauseRemaining(local, Service::get().serverNow()) > 0;
     }
@@ -1668,6 +1764,8 @@ public:
     }
     // 플레이가 아닌 이유(안티치트, 연결 끊김, 기권, 일시정지 초과)로 끝났을 때 그 사유. 아니면 빈 문구.
     // 연결 끊김 = 진 쪽이 기권으로 기록됐고 안티치트가 아니며, 마지막 보고가 결과보다 25초 이상 앞섬.
+    // 1.0.8 시간제는 플레이로 끝나도 승부를 가른 것(먼저 클리어 / 시간 안의 최고 %)을 알리고, 일시정지 한도가
+    // 없으므로 일시정지 사유는 쓰지 않는다.
     struct ResultReason {
         std::string text;
         bool disconnected = false;
@@ -1683,6 +1781,17 @@ public:
             if (uid == hostProfile.uid || uid == guestProfile.uid)
                 return {fmt::format("Fewer coins: {} vs {}", fewer, more), false, true};
             return {fmt::format("Decided by coins: {} vs {}", more, fewer), false, true};
+        }
+        bool const player = uid == hostProfile.uid || uid == guestProfile.uid;
+        if (rules.mode == 2 && !loserState.forfeited) {
+            if (winnerState.cleared)
+                return {info.winnerUid == uid ? "You cleared it first" : player ? "Your opponent cleared it first"
+                                                                                 : "Cleared first"};
+            int const mine = (uid == hostProfile.uid ? info.host : info.guest).bestPercent;
+            int const theirs = (uid == hostProfile.uid ? info.guest : info.host).bestPercent;
+            return {player ? fmt::format("Time's up - your best {}% vs {}%", mine, theirs)
+                           : fmt::format("Time's up - best {}% vs {}%", winnerState.bestPercent,
+                                         loserState.bestPercent)};
         }
         if (!loserState.forfeited && loserState.pausedAt <= 0) return {};
         bool const won = info.winnerUid == uid;
@@ -2334,6 +2443,27 @@ public:
             }
             updateFreePlayPause(owner.data());
             updateCursor(owner.data(), dt);
+            // 1.0.8: 연습 모드 여부를 보고한다(상대 카드의 연습 표시). 시간제에서 판 도중 연습을 켜면 그 판의
+            // 나머지는 세지 않는다: 리플레이와 기록은 거기서 끝난다.
+            if (bool const practicingNow = owner->m_isPracticeMode; local.practicing != practicingNow) {
+                local.practicing = practicingNow;
+                dirty = true;
+                reportTimer = 0.f;
+                if (timed && practicingNow && !freePlay && local.inAttempt && !runPractice) {
+                    runPractice = true;
+                    replay::endAttempt(local.currentPercent, replay::End::Cut);
+                    saveAttempt();
+                    local.currentPercent = 0;
+                }
+            }
+            updateTime(owner.data(), now);
+            if (practiceRestart > 0.f && !owner->m_isPaused) {
+                practiceRestart -= dt;
+                if (practiceRestart <= 0.f) {
+                    practiceRestart = 0.f;
+                    owner->resetLevelFromStart();
+                }
+            }
             trackLevelTime(owner.data());
             int const pauseMenu = pauseMenuState(owner.data());
             bool actuallyPaused = nativePauseActive(owner->m_isPaused, pauseMenu > 0);
@@ -2341,8 +2471,8 @@ public:
             if (!measuring && local.paused != actuallyPaused) pause(owner.data(), actuallyPaused);
             sampleState(owner.data());
             updatePauseClock(owner.data(), now);
-            if (!local.forfeited && !freePlay && pauseRemaining(local, now) == 0) forfeit(false);
-            if (pauseRemaining(other, now) == 0) dirty = true;
+            if (!timed && !local.forfeited && !freePlay && pauseRemaining(local, now) == 0) forfeit(false);
+            if (!timed && pauseRemaining(other, now) == 0) dirty = true;
             if (!finished && !leaving) watchdog(owner.data(), dt);
             if (!finished && !leaving) updatePauseHold(owner.data(), dt);
         }
@@ -2362,11 +2492,15 @@ public:
         uiTimer -= dt;
         if (uiTimer <= 0.f) {
             uiTimer = .1f;
+            int64_t const timeLeft = timed && timeDeadline > 0 ? std::max<int64_t>(0, timeDeadline - now) : -1;
+            bool const timeUp = timed && (buzzer || (timeDeadline > 0 && now >= timeDeadline));
             if (auto cards = groupHUD.lock()) {
+                cards->setTime(timeLeft, timeUp);
                 if (auto const& room = Service::get().group(); room && room->battle && room->battle->id == battleID)
                     cards->updateGroup(local, *room->battle, uid);
             }
             if (auto cards = playerHUD.lock()) {
+                cards->setTime(timeLeft, timeUp);
                 cards->setSeatRules(localRules(), otherRules());
                 cards->updatePlayers(local, other);
                 if (auto const& room = Service::get().room(); room && room->rules.allowHacks) {
@@ -2383,8 +2517,8 @@ public:
                               : reportFailures >= 3    ? "Retrying match sync... " + reportError
                               : timedOut               ? "Pause limit reached."
                               : local.forfeited        ? "Forfeited."
-                              : local.paused           ? "Paused"
                               : local.cleared          ? "Cleared! Waiting for the other players..."
+                              : spectating && timed    ? "Time's up - waiting for the other players..."
                               : spectating             ? "Out of lives - waiting for the other players..."
                               : syncBehind()           ? "Syncing with the server..."
                                                        : "");
@@ -2393,11 +2527,10 @@ public:
                               : reportFailures >= 3    ? "Retrying match sync... " + reportError
                               : timedOut               ? "Pause limit reached. Waiting for result..."
                               : local.forfeited        ? "Match forfeited. Waiting for result..."
-                              : local.paused           ? "Paused"
-                              : other.paused           ? "Opponent paused"
                               : spectating && terminal(other, otherRules()) ? "Confirming match result..."
-                              : syncBehind()                                ? "Syncing with the server..."
-                                                                            : "");
+                              : spectating && timed ? "Waiting for your opponent's last attempt..."
+                              : syncBehind()        ? "Syncing with the server..."
+                                                    : "");
             updateLinkWarning(snapshot);
             if (auto frame = freePlayFrame.lock()) showLiveState(frame.data(), owner.data(), freePlayCaption);
         }

@@ -82,7 +82,8 @@ void soloResolve(Json& body) {
     auto const me = parseBattlePlayer(std::as_const(battle)["host"]);
     bool const ended = me.forfeited || battle::terminal(me, rules) ||
                        (rules.mode == 1 && battle::raceReached(me) >= rules.targetPercent) ||
-                       (battle::pauseRemaining(me, nowMs()) == 0 && !battle::finalByPlay(me, rules));
+                       (rules.mode != 2 && battle::pauseRemaining(me, nowMs()) == 0 &&
+                        !battle::finalByPlay(me, rules));  // (시간제는 일시정지 한도가 없다)
     if (!ended) return;
     battle["draw"] = false;
     battle["winnerUid"] = stringAt(std::as_const(body)["host"], "uid");

@@ -4,6 +4,7 @@
 #include "BattleHUD.hpp"
 #include "BattleProgress.hpp"
 #include "Edition.hpp"
+#include "SpriteFrames.hpp"
 #include "VectorArt.hpp"
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/SimplePlayer.hpp>
@@ -11,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -56,6 +58,32 @@ bool text(CCLabelBMFont* label, std::string const& value, float width, float sca
     return true;
 }
 
+// 퍼센트 현황(아래 줄)의 상태 색: 연습 모드(규칙과 다를 때), 일시정지, 시간제의 마지막 판(버저비터).
+// 모든 대결에 쓴다 - 화면 가운데의 "Paused" / "Opponent paused" 문구 대신.
+constexpr ccColor3B kPracticeTint{90, 200, 255}, kPauseTint{150, 150, 150}, kBuzzerTint{255, 80, 95};
+enum CardStatus : int { kStatusNone = 0, kStatusPractice = 1, kStatusPause = 2, kStatusBuzzer = 3 };
+// 상태 아이콘(GJ_GameSheet03의 연습/일시정지 버튼)을 height 높이로 만든다(처음엔 숨김).
+CCSprite* statusIcon(CCNode* parent, float height) {
+    auto* sprite = loadedFrameSprite("GJ_practiceBtn_001.png", "GJ_GameSheet03.plist");
+    if (!sprite) return nullptr;
+    sprite->setScale(height / std::max(1.f, sprite->getContentSize().height));
+    sprite->setVisible(false);
+    parent->addChild(sprite);
+    return sprite;
+}
+// 아이콘의 그림을 상태에 맞게 바꾼다(높이는 그대로).
+void showStatusIcon(CCSprite* sprite, int status, float height) {
+    if (!sprite) return;
+    bool const shown = status == kStatusPractice || status == kStatusPause;
+    sprite->setVisible(shown);
+    if (!shown) return;
+    if (auto* frame = loadedFrame(status == kStatusPause ? "GJ_pauseBtn_001.png" : "GJ_practiceBtn_001.png",
+                                  "GJ_GameSheet03.plist")) {
+        if (!sprite->isFrameDisplayed(frame)) sprite->setDisplayFrame(frame);
+        sprite->setScale(height / std::max(1.f, sprite->getContentSize().height));
+    }
+}
+
 // 플레이어 한 명의 카드. 라벨들과 애니메이션/투명도 상태를 들고 있다.
 struct Card {
     PlayerProfile profile;
@@ -79,6 +107,15 @@ struct Card {
     bool mirrored = false;
     bool lives = false;
     bool initialized = false;
+    // 1.0.8: 시간제 카드(시도 수 대신 큰 상태 아이콘, 내 카드엔 남은 시간)와 모든 대결의 상태 아이콘.
+    bool timed = false, timeUp = false;
+    int64_t timeLeft = -1;
+    int status = kStatusNone;
+    CCSprite* bigIcon = nullptr;    // 시간제: 시도 수 자리의 큰 연습/일시정지 아이콘
+    CCSprite* smallIcon = nullptr;  // 다른 모드: 퍼센트 현황 앞의 작은 아이콘
+    CCSprite* clockIcon = nullptr;  // 시간제: 남은 시간
+    CCLabelBMFont* clock = nullptr;
+    CCLabelBMFont* lastAttempt = nullptr;
     GLubyte alpha = 255, shownAlpha = 255;
     // 파티클 원래 알파 값(투명도 적용 후 복원 계산용).
     struct ParticleAlpha {
@@ -146,12 +183,29 @@ struct Card {
 
         // 시도 모드(연습 아님)에서만 하트와 남은 목숨을 표시한다.
         lives = rules.mode == 0 && !rules.practice;
+        timed = rules.mode == 2;
         current = makeLabel("", {edge, 26.f}, ccWHITE);
         heart = lifeHeart(13.f);
         heart->setVisible(lives);
         root->addChild(heart);
         progress = makeLabel("", {edge, 26.f}, ccc3(181, 235, 255));
+        progress->setVisible(!timed);
         detail = makeLabel("", {edge, 8.f}, ccc3(132, 200, 235));
+        bigIcon = timed ? statusIcon(root, 18.f) : nullptr;
+        smallIcon = timed ? nullptr : statusIcon(root, 11.f);
+        if (timed) {
+            if ((clockIcon = loadedFrameSprite("GJ_timeIcon_001.png", "GJ_GameSheet03.plist"))) {
+                clockIcon->setScale(10.f / std::max(1.f, clockIcon->getContentSize().height));
+                clockIcon->setVisible(false);
+                root->addChild(clockIcon);
+            }
+            clock = makeLabel("00:00", {edge, 8.f}, ccWHITE);
+            clock->setScale(.3f);
+            clock->setVisible(false);
+            lastAttempt = makeLabel("LAST ATTEMPT", {edge, 8.f}, kBuzzerTint);
+            lastAttempt->setScale(.2f);
+            lastAttempt->setVisible(false);
+        }
         log = CCNode::create();
         log->setPosition({mirrored ? width - 8.f : 8.f, -5.f});
         root->addChild(log);
@@ -185,6 +239,49 @@ struct Card {
             x += dir * 15.f;
         }
         progress->setPositionX(x);
+        if (bigIcon) bigIcon->setPosition({x + dir * 9.f, 26.f});
+    }
+    // 아래 줄을 가장자리부터 차례로 놓는다: [시계 + 남은 시간] [작은 상태 아이콘] [퍼센트 현황] [LAST ATTEMPT].
+    void placeDetail() {
+        float const dir = mirrored ? -1.f : 1.f;
+        float x = edge;
+        auto icon = [&](CCNode* node, float slot) {
+            if (!node || !node->isVisible()) return;
+            node->setPosition({x + dir * slot / 2.f, 8.f});
+            x += dir * slot;
+        };
+        auto line = [&](CCLabelBMFont* label, float scale, float gap) {
+            if (!label || !label->isVisible()) return;
+            label->setPositionX(x);
+            x += dir * (label->getContentSize().width * scale + gap);
+        };
+        if (clock && clock->isVisible()) {
+            icon(clockIcon, 12.f);
+            line(clock, clock->getScale(), 7.f);
+        }
+        icon(smallIcon, 13.f);
+        line(detail, detailScale, 5.f);
+        line(lastAttempt, lastAttempt ? lastAttempt->getScale() : 1.f, 0.f);
+    }
+    // 시간제: 남은 시간(ms, 음수면 숨김)과 시간이 끝났는지.
+    void setTime(int64_t left, bool up) {
+        timeLeft = left;
+        timeUp = up;
+        if (!clock) return;
+        bool const shown = left >= 0;
+        bool const changed = clock->isVisible() != shown;
+        clock->setVisible(shown);
+        if (clockIcon) clockIcon->setVisible(shown);
+        if (!shown) {
+            if (changed) placeDetail();
+            return;
+        }
+        auto const value = timeClockText(left);
+        clock->setColor(up ? kBuzzerTint : ccWHITE);
+        if (value != clock->getString() || changed) {
+            clock->setString(value.c_str());
+            placeDetail();
+        }
     }
 
     // 새 로그 줄을 넣기 전에 기존 줄을 한 칸씩 아래로 내리고 3번째 이후는 지운다.
@@ -267,7 +364,9 @@ struct Card {
         if (text(current, fmt::format("{}%", std::clamp(state.currentPercent, 0, 100)), textWidth * .5f, .48f))
             currentScale = current->getScale();
         std::string value;
-        if (endless)
+        if (timed)
+            value = "";  // 시간제: 시도 수 없음(그 자리에 상태 아이콘)
+        else if (endless)
             value = "INF";
         else if (lives)
             value = std::to_string(remaining);
@@ -286,12 +385,19 @@ struct Card {
 
         std::string info;
         ccColor3B tint = ccc3(136, 207, 243);
+        // 1.0.8: 일시정지 / 연습(규칙과 다를 때) / 시간제의 마지막 판은 문구 대신 색과 아이콘으로 보여 준다.
+        int next = kStatusNone;
+        if (!state.forfeited && !state.cleared) {
+            if (timed && timeUp && !battle::terminal(state, rules))
+                next = kStatusBuzzer;
+            else if (state.paused)
+                next = kStatusPause;
+            else if (state.practicing != rules.practice)
+                next = kStatusPractice;
+        }
         if (state.forfeited) {
             info = "FORFEITED";
             tint = ccc3(255, 146, 162);
-        } else if (state.paused) {
-            info = "PAUSED";
-            tint = ccc3(255, 216, 135);
         } else if (state.cleared) {
             info = "CLEAR!";
             tint = ccc3(138, 255, 193);
@@ -302,14 +408,32 @@ struct Card {
             info = fmt::format("TARGET {}%", rules.targetPercent);
         else
             info = fmt::format("BEST {}%", state.bestPercent);
-        bool const detailChanged = text(detail, info, textWidth, .3f);
+        if (next == kStatusPractice) tint = kPracticeTint;
+        if (next == kStatusPause) tint = kPauseTint;
+        if (next == kStatusBuzzer) tint = kBuzzerTint;
+        bool layoutChanged = next != status;
+        if (layoutChanged) {
+            status = next;
+            showStatusIcon(timed ? bigIcon : smallIcon, status, timed ? 18.f : 11.f);
+            if (lastAttempt) lastAttempt->setVisible(status == kStatusBuzzer);
+            placedWidth = -1.f;
+        }
+        // 같은 줄의 남은 시간, 작은 아이콘, LAST ATTEMPT 자리를 뺀 폭에 맞춘다.
+        float room = textWidth;
+        if (clock && clock->isVisible()) room -= 19.f + clock->getContentSize().width * clock->getScale();
+        if (smallIcon && smallIcon->isVisible()) room -= 13.f;
+        if (lastAttempt && lastAttempt->isVisible()) room -= 5.f + lastAttempt->getContentSize().width * lastAttempt->getScale();
+        bool const detailChanged = text(detail, info, std::max(40.f, room), .3f);
         if (detailChanged) detailScale = detail->getScale();
         detail->setColor(tint);
+        if (detailChanged || layoutChanged) placeDetail();
         if (initialized) {
             if (lives && !endless && remaining != lastRemaining) progress->setScale(progressScale * 1.75f);
             if (state.currentPercent != lastPercent)
                 current->setScale(std::max(current->getScale(), currentScale * 1.18f));
-            if (state.attemptsUsed > lastAttempts && !state.cleared && !state.forfeited)
+            // (1.0.8: 연습 판의 죽음은 적지 않는다)
+            if (state.attemptsUsed > lastAttempts && !state.cleared && !state.forfeited &&
+                state.practicing == rules.practice)
                 addDeath(state.inAttempt ? lastRunPercent : state.currentPercent);
         }
         if (state.inAttempt) lastRunPercent = state.currentPercent;
@@ -615,6 +739,10 @@ void BattleHUD::setHacks(std::string const& left, std::string const& right) {
 void BattleHUD::showReroll(bool left) {
     (left ? m->host : m->guest).addReroll();
 }
+void BattleHUD::setTime(int64_t leftMs, bool timeUp) {
+    m->host.setTime(leftMs, timeUp);
+    m->guest.setTime(-1, timeUp);
+}
 // 매 프레임 라벨 애니메이션과 투명도를 갱신한다.
 void BattleHUD::update(float dt) {
     m->host.animate(dt);
@@ -624,33 +752,42 @@ void BattleHUD::update(float dt) {
 }
 
 namespace {
-// 그룹 순위 항목: 좌석, 도달 퍼센트, 남은 목숨, 탈락 여부, 내 자리 여부.
+// 그룹 순위 항목: 좌석, 도달 퍼센트, 남은 목숨, 탈락 여부, 내 자리 여부, (시간제) 클리어 여부와 서버의 클리어 시각.
 struct GroupStanding {
     size_t seat;
     int reached, lives;
     bool out, mine;
+    bool cleared = false;
+    int64_t clearedAt = 0;
 };
 // 그룹 순위를 계산한다. 내 상태는 로컬 값을 쓰고, 탈락하지 않은 쪽 -> 도달 퍼센트 -> 남은 목숨 순으로 정렬한다.
-// alive에는 아직 끝나지 않은 생존자 수를 돌려준다.
+// 목숨은 목숨제(연습 아님)에만 있다(1.0.8: 퍼센트/연습/시간제에서 시도 수로 탈락시키지 않는다). 시간제는 클리어한
+// 사람이 클리어한 순서대로 앞에 온다. alive에는 아직 끝나지 않은 생존자 수를 돌려준다.
 std::vector<GroupStanding> groupStandings(BattlePlayerState const& self, GroupBattle const& battle,
-                                          std::string const& selfUid, int attempts, int& alive) {
+                                          std::string const& selfUid, GameRules const& rules, int& alive) {
     std::vector<GroupStanding> entries;
     entries.reserve(battle.seats.size());
     alive = 0;
+    bool const lifeRule = rules.mode == 0 && !rules.practice;
+    bool const timed = rules.mode == 2;
     for (size_t i = 0; i < battle.seats.size(); ++i) {
         auto const& seat = battle.seats[i];
         bool const mine = seat.profile.uid == selfUid;
         auto const& state = mine ? self : seat.state;
-        int const lives = std::max(0, attempts - state.attemptsUsed);
+        int const lives = lifeRule ? std::max(0, rules.attempts - state.attemptsUsed) : 1;
         bool const out = state.forfeited || (!state.cleared && lives == 0);
-        if (!out && !state.cleared) ++alive;
+        bool const finished = state.cleared || (timed && timeLastRunPlayed(state));
+        if (!out && !finished) ++alive;
         int const reached =
             state.cleared ? 100
                           : std::clamp(std::max(state.bestPercent, state.inAttempt ? state.currentPercent : 0), 0, 100);
-        entries.push_back({i, reached, out ? 0 : lives, state.forfeited, mine});
+        entries.push_back({i, reached, out ? 0 : lives, state.forfeited, mine, timed && state.cleared,
+                           seat.clearedAt > 0 ? seat.clearedAt : std::numeric_limits<int64_t>::max()});
     }
     std::stable_sort(entries.begin(), entries.end(), [](GroupStanding const& a, GroupStanding const& b) {
         if (a.out != b.out) return !a.out;
+        if (a.cleared != b.cleared) return a.cleared;
+        if (a.cleared) return a.clearedAt < b.clearedAt;
         if (a.reached != b.reached) return a.reached > b.reached;
         return a.lives > b.lives;
     });
@@ -675,6 +812,7 @@ struct GroupHUD::Impl {
     GameRules rules;
     Card self;
     Card leader;
+    bool timeUp = false;
     std::string leaderUid;
     float switchCooldown = 0.f;
     float width = 0.f;
@@ -721,7 +859,7 @@ bool GroupHUD::init(PlayerProfile const& self, GameRules const& rules) {
 void GroupHUD::updateGroup(BattlePlayerState const& self, GroupBattle const& battle, std::string const& selfUid) {
     m->self.update(self, m->rules);
     int alive = 0;
-    auto const entries = groupStandings(self, battle, selfUid, m->rules.attempts, alive);
+    auto const entries = groupStandings(self, battle, selfUid, m->rules, alive);
     auto best = std::find_if(entries.begin(), entries.end(), [](GroupStanding const& e) { return !e.mine; });
     if (best == entries.end()) {
         if (m->leader.root) {
@@ -756,6 +894,7 @@ void GroupHUD::updateGroup(BattlePlayerState const& self, GroupBattle const& bat
             m->leader.log = nullptr;
         }
         m->leader.alpha = m->otherAlpha;
+        m->leader.setTime(-1, m->timeUp);
         m->leaderUid = seat.profile.uid;
         m->switchCooldown = kLeaderSwitchSeconds;
     }
@@ -771,6 +910,12 @@ void GroupHUD::updateGroup(BattlePlayerState const& self, GroupBattle const& bat
     }
 }
 
+// 시간제: 내 카드의 남은 시간과 시간이 끝났는지(선두 카드는 색만).
+void GroupHUD::setTime(int64_t leftMs, bool timeUp) {
+    m->timeUp = timeUp;
+    m->self.setTime(leftMs, timeUp);
+    if (m->leader.root) m->leader.setTime(-1, timeUp);
+}
 // 내 카드와 선두 카드의 투명도를 설정한다.
 void GroupHUD::setCardOpacity(GLubyte own, GLubyte other) {
     m->ownAlpha = own;

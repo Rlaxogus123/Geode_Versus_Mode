@@ -95,15 +95,28 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
         auto seconds = std::max<int64_t>(0, ms) / 1000;
         return fmt::format("{:02}:{:02}", seconds / 60, seconds % 60);
     }
-    // 규칙 요약 문구: PRACTICE / TARGET n% / n LIVES, 속도가 100%가 아니면 뒤에 덧붙인다.
+    // 규칙 요약 문구: TIME 1:30 BETA / PRACTICE / TARGET n% / n LIVES, 속도가 100%가 아니면 뒤에 덧붙인다.
     static std::string ruleText(GameRules const& rules) {
         std::string const speed = rules.speed != 100 ? "  " + speedText(rules.speed) : std::string();
+        if (rules.mode == 2)
+            return (rules.timeType == 1 ? fmt::format("TIME {}% OF MAP", rules.timePercent)
+                                        : "TIME " + timeValueText(rules.timeSeconds)) +
+                   " BETA" + speed;
         if (rules.practice) return "PRACTICE" + speed;
         if (rules.mode == 1) return fmt::format("TARGET {}%", rules.targetPercent) + speed;
         return fmt::format("{} LIVES", rules.attempts) + speed;
     }
+    // 경과 시간 칸: 시작 전이면 LOADING, 시간제는 남은 시간(끝나면 TIME UP), 나머지는 흐른 시간.
+    static std::string clockText(GameRules const& rules, int64_t releasedAt, int64_t timeLimitMs, int64_t now) {
+        if (releasedAt <= 0) return "LOADING";
+        if (rules.mode == 2 && timeLimitMs > 0) {
+            auto const left = releasedAt + kBattleCountdownMs + timeLimitMs - now;
+            return left > 0 ? timeClockText(left) + " LEFT" : std::string("TIME UP");
+        }
+        return clock(now - releasedAt);
+    }
     // 플레이어 한 줄(아이콘, 랭크 아이콘/닉네임, 현재 %, 최고 %, 시도 횟수, 상태 태그)을 그린다.
-    // 상태 태그는 CLEAR / FORFEIT / PAUSED / WAITING(관전) / RESPAWN 중 해당하는 것.
+    // 상태 태그는 CLEAR / FORFEIT / PAUSED / WAITING(관전) / RESPAWN 중 해당하는 것(시간제는 LAST / PRACTICE도).
     void playerLine(CCNode* cell, LivePlayer const& player, GameRules const& rules, bool ranked, float y) {
         auto const& state = player.state;
         auto* manager = GameManager::sharedState();
@@ -140,9 +153,16 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
         } else if (state.forfeited) {
             tag = "FORFEIT";
             tint = ccc3(255, 146, 162);
-        } else if (state.paused)
+        } else if (rules.mode == 2 && state.lastRun > 0 && state.inAttempt) {
+            tag = "LAST";
+            tint = ccc3(255, 80, 95);
+        } else if (state.paused) {
             tag = "PAUSED";
-        else if (!state.inAttempt)
+            if (rules.mode == 2) tint = ccc3(150, 150, 150);
+        } else if (rules.mode == 2 && state.practicing) {
+            tag = "PRACTICE";
+            tint = ccc3(90, 200, 255);
+        } else if (!state.inAttempt)
             tag = state.spectating ? "WAITING" : "RESPAWN";
         if (!tag.empty()) label(cell, tag, {368.f, y}, .22f, 42.f, tint, false, "bigFont.fnt");
     }
@@ -491,7 +511,7 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
                 m_scroll->m_contentLayer->addChild(playTap);
             }
             auto info = fmt::format("{}  |  {}", ruleText(match.rules),
-                                    match.releasedAt > 0 ? clock(now - match.releasedAt) : std::string("LOADING"));
+                                    clockText(match.rules, match.releasedAt, match.timeLimitMs, now));
             if (!match.ranked && (match.scoreHost || match.scoreGuest))
                 info += fmt::format("  |  SERIES {}-{}", match.scoreHost, match.scoreGuest);
             info += rankNote(match.avgRank);
@@ -559,7 +579,7 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
                 {width - 6.f - spectateWidth + spectate->getScaledContentSize().width / 2.f, kRowHeight - 12.f});
             holder->addChild(spectate);
             auto info = fmt::format("{}  |  {}  |  {} / {} PLAYING", ruleText(group.rules),
-                                    group.releasedAt > 0 ? clock(now - group.releasedAt) : std::string("LOADING"),
+                                    clockText(group.rules, group.releasedAt, group.timeLimitMs, now),
                                     group.alive, group.count) +
                         rankNote(group.avgRank);
             auto* infoLabel = label(holder, info, {width - 12.f - spectateWidth, kRowHeight - 12.f}, .24f,

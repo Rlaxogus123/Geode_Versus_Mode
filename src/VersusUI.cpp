@@ -645,9 +645,9 @@ std::string speedText(int percent) {
 }
 // 방 규칙을 한 줄 요약 문자열로 만든다 (모드, 연습, 핵 허용, 속도).
 std::string rulesText(GameRules const& rules) {
-    std::string result = rules.mode == 0
-                             ? (rules.practice ? "Fewest Attempts" : fmt::format("{} Attempts", rules.attempts))
-                             : fmt::format("First to {}%", rules.targetPercent);
+    std::string result = rules.mode == 2   ? fmt::format("Time {} (Beta)", timeRuleText(rules))
+                         : rules.mode == 0 ? (rules.practice ? "Fewest Attempts" : fmt::format("{} Attempts", rules.attempts))
+                                           : fmt::format("First to {}%", rules.targetPercent);
     if (rules.practice) result += " / Practice";
     if (rules.allowHacks) result += " / Hacks OK";
     if (rules.speed != 100) result += " / Speed " + speedText(rules.speed);
@@ -2303,6 +2303,12 @@ std::string decisionReason(MatchRecord const& match) {
     // 일시정지 허용 시간 20초(ms). 50ms 여유로 소진 여부를 판단한다.
     constexpr int64_t kPauseBudget = 20000;
     if (!lost.integrityCode.empty()) return name + " was disqualified by the anti-cheat";
+    if (match.rules.mode == 2) {  // 1.0.8 시간제: 일시정지 한도가 없다
+        if (lost.forfeited) return name + " left or disconnected";
+        auto const& winner = won ? match.selfStats : match.opponentStats;
+        if (winner.cleared) return "cleared first in the Time battle";
+        return fmt::format("best within the time: {}% vs {}%", winner.bestPercent, lost.bestPercent);
+    }
     if (lost.forfeited)
         return lost.pauseUsedMs >= kPauseBudget - 50 ? name + " ran out of pause time" : name + " left or disconnected";
     if (lost.paused || lost.pauseUsedMs >= kPauseBudget) return name + " ran out of pause time";
@@ -3433,6 +3439,56 @@ std::string autoLivesLine(bool on, LevelInfo const& level, bool random, char con
     return fmt::format("Auto: Ranked's {} for the {}", unit, random ? "map rolled at the start" : "map, once chosen");
 }
 
+// 1.0.8 규칙 창의 모드 버튼 문구. 공개 방에서 고를 수 있는 모드는 3개다(Time은 베타).
+char const* modeCaption(int mode) {
+    return mode == 2 ? "Mode: Time 3/3" : mode == 1 ? "Mode: Percent 2/3" : "Mode: Attempts 1/3";
+}
+// 시간제(Time)가 베타라는 표시: 버튼 오른쪽에 붙는 작은 빨간 "BETA" 딱지(32x13, 살짝 맥동한다).
+// scale은 작은 버튼에 붙일 때 줄이는 배율.
+CCNode* betaSticker(float scale = 1.f) {
+    auto* sticker = CCNode::create();
+    sticker->setID("time-beta"_spr);
+    sticker->setContentSize({32.f, 13.f});
+    sticker->setAnchorPoint({.5f, .5f});
+    auto* back = NineSlice::create("square02b_001.png");
+    back->setContentSize({64.f, 26.f});
+    back->setScale(.5f);
+    back->setColor(ccc3(240, 60, 80));
+    back->setPosition({16.f, 6.5f});
+    sticker->addChild(back);
+    auto* text = CCLabelBMFont::create("BETA", "bigFont.fnt");
+    text->setScale(.26f);
+    text->setPosition({16.f, 7.f});
+    sticker->addChild(text, 1);
+    sticker->setScale(scale);
+    sticker->runAction(CCRepeatForever::create(
+        CCSequence::create(CCEaseSineInOut::create(CCScaleTo::create(.6f, scale * 1.06f)),
+                           CCEaseSineInOut::create(CCScaleTo::create(.6f, scale)), nullptr)));
+    return sticker;
+}
+// 딱지를 버튼 바로 오른쪽(4pt 띄우고 세로 가운데)에 둔다. 버튼 문구가 바뀌어 크기가 달라질 때마다 다시 부른다.
+// scale은 betaSticker에 준 배율.
+void placeBetaSticker(CCMenuItemSpriteExtra* item, CCNode* sticker, bool shown, float scale = 1.f) {
+    if (!item || !sticker) return;
+    sticker->setVisible(shown);
+    auto const size = item->getContentSize();
+    sticker->setPosition({size.width + 4.f + 16.f * scale, size.height / 2.f});
+}
+// 시간제 안내 문구. 고정 시간은 승리 조건을, 맵 비율은 이 맵에서 몇 분이 되는지를 알려 준다.
+std::string timeLengthLine(GameRules const& rules, LevelInfo const& level, bool random) {
+    if (rules.timeType == 0) return "Best % within the time wins - a clear wins at once";
+    if (random) return fmt::format("{}% of the length of the map rolled at the start", rules.timePercent);
+    if (level.id <= 0) return fmt::format("{}% of the map's length, once chosen", rules.timePercent);
+    double const seconds = mapPlaySeconds(level.id);
+    if (!(seconds > 0.))
+        return fmt::format("{}% of the map's length ({} if it is unknown)", rules.timePercent,
+                           timeValueText(kTimeDefaultSeconds));
+    auto const limit = timeLimitMs(rules, seconds);
+    return fmt::format("On this map: {} ({}% of {}{})", timeValueText(static_cast<int>(limit / 1000)),
+                       rules.timePercent, timeValueText(static_cast<int>(seconds)),
+                       rules.speed != 100 ? " at " + speedText(rules.speed) : std::string());
+}
+
 // 규칙 팝업의 Auto 안내 문구 위치/크기 상수.
 constexpr float kRulesAutoX = 97.f, kRulesAutoY = 140.f;
 constexpr float kRulesAutoTextX = 108.f, kRulesAutoTextWidth = 130.f, kRulesAutoTextHeight = 17.f;
@@ -3506,23 +3562,32 @@ class GameRulesPopup : public ::versus::DeferredPopup {
     CCMenuItemToggler* m_auto = nullptr;
     CCNode* m_autoHint = nullptr;
     NineSlice* m_rulesPanel = nullptr;
-    // Auto 목숨 계산에 쓰는 방의 레벨 정보와 랜덤 맵 여부, 플랫포머 맵 여부(Percent 모드 불가).
+    // 1.0.8 시간제(Time, 베타): 시간 방식(Fixed / Map %) 버튼(시간제에서는 연습 버튼 자리), 모드 버튼의 BETA 딱지,
+    // 시간 안내 문구, 시간제로 바꾸기 전의 연습 규칙(시간제에는 연습 규칙이 없어 끄고, 다른 모드로 가면 되살린다).
+    CCMenuItemSpriteExtra* m_timeType = nullptr;
+    CCNode* m_beta = nullptr;
+    CCLabelBMFont* m_timeHint = nullptr;
+    bool m_savedPractice = false;
+    // Auto 목숨 계산에 쓰는 방의 레벨 정보와 랜덤 맵 여부, 플랫포머 맵 여부(Percent·Time 모드 불가).
     LevelInfo m_level;
     bool m_random = false;
     bool m_pending = false;
     bool m_readOnly = false;
     bool m_platformer = false;
 
-    // 버튼 안의 글자/배경을 바꾼다.
+    // 버튼 안의 글자/배경을 바꾼다. maxWidth가 있으면 버튼이 그 폭을 넘지 않게 줄인다.
     void caption(CCMenuItemSpriteExtra* item, std::string const& text, float scale = .5f,
-                 char const* background = "GJ_button_04.png") {
+                 char const* background = "GJ_button_04.png", float maxWidth = 0.f) {
         auto* sprite = ButtonSprite::create(text.c_str(), "goldFont.fnt", background);
+        float const width = sprite->getContentSize().width;
+        if (maxWidth > 0.f && width * scale > maxWidth) scale = maxWidth / width;
         sprite->setScale(scale);
         item->setSprite(sprite);
     }
     bool init(RoomInfo const& room) {
         if (!Popup::init(330.f, 270.f, "GJ_square02.png")) return false;
         m_rules = room.rules;
+        m_savedPractice = m_rules.practice;
         m_readOnly = !Service::get().isHost() || room.started || drawingMap(room);
         m_platformer = room.level.platformer || (room.mapSelection.random && room.mapSelection.platformer);
         m_roomID = room.id;
@@ -3543,6 +3608,8 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         speedPanel->setOpacity(110);
         m_mainLayer->addChild(speedPanel);
         m_mode = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onMode), "Attempts", {165.f, 217.f}, .62f);
+        m_beta = betaSticker();
+        m_mode->addChild(m_beta, 5);
         m_valueTitle = label(m_mainLayer, "Attempt limit", {165.f, 189.f}, .45f, 270.f, kIce);
         m_value = TextInput::create(96.f, "3");
         m_value->setCommonFilter(CommonFilter::Uint);
@@ -3564,6 +3631,11 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         m_practice =
             button(m_buttonMenu, this, menu_selector(GameRulesPopup::onPractice), "Practice: OFF", {98.f, 109.f}, .5f);
         m_hacks = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onHacks), "Hacks: OFF", {232.f, 109.f}, .5f);
+        m_timeType =
+            button(m_buttonMenu, this, menu_selector(GameRulesPopup::onTimeType), "Time: Fixed", {98.f, 109.f}, .5f);
+        m_timeType->setID("rules-time-type"_spr);
+        m_timeHint = label(m_mainLayer, "", {165.f, 139.f}, .5f, 270.f, kMuted, false, "chatFont.fnt");
+        m_timeHint->setID("rules-time-hint"_spr);
         m_speedLabel = label(m_mainLayer, "Speed: 1x", {165.f, 80.f}, .5f, 120.f, kIce);
         m_speedLess = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onSpeedLess), "-", {95.f, 80.f}, .46f);
         m_speedMore = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onSpeedMore), "+", {235.f, 80.f}, .46f);
@@ -3574,41 +3646,75 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         refresh();
         return true;
     }
-    // 입력창 값을 현재 모드의 값(시도 횟수 1~99 또는 목표 퍼센트 1~100)으로 읽어 m_rules에 반영한다.
-    // 범위를 벗어나면 false (showError면 안내도 띄움).
+    // 입력창 값을 현재 모드의 값(시도 횟수 1~99, 목표 퍼센트 1~100, 시간제의 시간 0:10~99:59 또는 맵 길이 비율
+    // 1~9999%)으로 읽어 m_rules에 반영한다. 범위를 벗어나면 false (showError면 안내도 띄움).
     bool readValue(bool showError = false) {
         auto const text = std::string(m_value->getString());
+        if (m_rules.mode == 2 && m_rules.timeType == 0) {
+            int const seconds = parseTimeText(text);
+            if (seconds < kTimeMinSeconds || seconds > kTimeMaxSeconds) {
+                if (showError) error("Enter a time from <cy>0:10</c> to <cy>99:59</c> (like 1:30).");
+                return false;
+            }
+            m_rules.timeSeconds = seconds;
+            return true;
+        }
         int value = 0;
         auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-        int const maximum = m_rules.mode == 0 ? 99 : 100;
+        int const maximum = m_rules.mode == 0 ? 99 : m_rules.mode == 1 ? 100 : kTimePercentMax;
         if (parsed.ec != std::errc() || parsed.ptr != text.data() + text.size() || value < 1 || value > maximum) {
             if (showError) error(fmt::format("Enter a number from 1 to {}.", maximum));
             return false;
         }
         if (m_rules.mode == 0)
             m_rules.attempts = value;
-        else
+        else if (m_rules.mode == 1)
             m_rules.targetPercent = value;
+        else
+            m_rules.timePercent = value;
         return true;
     }
     // m_rules 상태에 맞춰 모든 컨트롤을 갱신한다. 연습 모드(Attempts)는 시도 제한이 없고,
     // Auto가 켜져 있으면 맵에서 계산한 개수를 쓰며 직접 입력은 막는다.
     void refresh() {
-        caption(m_mode, m_rules.mode == 0 ? "Mode: Attempts" : "Mode: Percent", .62f);
-        m_rulesPanel->setColor(m_rules.mode == 0 ? ccc3(205, 210, 220) : ccc3(150, 255, 165));
+        bool const timed = m_rules.mode == 2;
+        caption(m_mode, modeCaption(m_rules.mode), .62f, "GJ_button_04.png", 232.f);
+        placeBetaSticker(m_mode, m_beta, timed);
+        m_rulesPanel->setColor(m_rules.mode == 0   ? ccc3(205, 210, 220)
+                               : m_rules.mode == 1 ? ccc3(150, 255, 165)
+                                                   : ccc3(255, 170, 70));
         m_rulesPanel->setOpacity(m_rules.mode == 0 ? 95 : 110);
         bool const unlimited = m_rules.mode == 0 && m_rules.practice;
         bool const autoOn = m_rules.livesFollowMap();
         if (autoOn)
             if (auto const value = autoLives(m_level, m_random)) m_rules.attempts = value->lives;
-        m_valueTitle->setString(unlimited           ? "No attempt limit"
-                                : m_rules.mode == 0 ? "Attempt limit (1-99)"
-                                                    : "Target percent (1-100)");
-        m_value->setString(std::to_string(m_rules.mode == 0 ? m_rules.attempts : m_rules.targetPercent));
+        m_valueTitle->setString(unlimited                  ? "No attempt limit"
+                                : m_rules.mode == 0        ? "Attempt limit (1-99)"
+                                : m_rules.mode == 1        ? "Target percent (1-100)"
+                                : m_rules.timeType == 0    ? "Time limit (0:10-99:59)"
+                                                           : "Percent of the map's length (1-9999)");
+        // 시간제의 고정 시간은 m:ss로 친다(초만 쳐도 된다). 나머지는 숫자만.
+        bool const clockValue = timed && m_rules.timeType == 0;
+        m_value->setFilter(clockValue ? "0123456789:" : "0123456789");
+        m_value->setMaxCharCount(clockValue ? 5 : timed ? 4 : 3);
+        m_value->setString(clockValue ? timeValueText(m_rules.timeSeconds)
+                                      : std::to_string(m_rules.mode == 0   ? m_rules.attempts
+                                                       : m_rules.mode == 1 ? m_rules.targetPercent
+                                                                           : m_rules.timePercent));
         m_value->setVisible(!unlimited);
         m_unlimited->setVisible(unlimited);
         caption(m_practice, m_rules.practice ? "Practice: ON" : "Practice: OFF", .5f,
                 m_rules.practice ? "GJ_button_01.png" : "GJ_button_04.png");
+        // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 그 자리에 시간 방식 버튼을 둔다.
+        m_practice->setVisible(!timed);
+        m_timeType->setVisible(timed);
+        caption(m_timeType, m_rules.timeType == 0 ? "Time: Fixed" : "Time: Map %", .5f);
+        enabled(m_timeType, !m_pending && !m_readOnly);
+        m_timeHint->setVisible(timed);
+        if (timed) {
+            m_timeHint->setString(timeLengthLine(m_rules, m_level, m_random).c_str());
+            m_timeHint->limitLabelWidth(270.f, .5f, .1f);
+        }
         caption(m_hacks, m_rules.allowHacks ? "Hacks: ON" : "Hacks: OFF", .5f,
                 m_rules.allowHacks ? "GJ_button_02.png" : "GJ_button_04.png");
         enabled(m_hacks, !m_pending && !m_readOnly);
@@ -3638,6 +3744,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
             m_mode->setOpacity(255);
             m_practice->setOpacity(255);
             m_hacks->setOpacity(255);
+            m_timeType->setOpacity(255);
             m_less->setVisible(false);
             m_more->setVisible(false);
             m_value->getBGSprite()->setOpacity(190);
@@ -3652,17 +3759,33 @@ class GameRulesPopup : public ::versus::DeferredPopup {
     }
     void onSpeedLess(CCObject*) { speedStep(-25); }
     void onSpeedMore(CCObject*) { speedStep(25); }
-    // 모드 전환 (Attempts <-> Percent). 플랫포머 맵은 Percent 모드를 쓸 수 없다.
+    // 모드 전환 (Attempts -> Percent -> Time -> Attempts). 플랫포머 맵은 Percent·Time 모드를 쓸 수 없다.
+    // 시간제로 갈 때는 연습 규칙을 끄고(시간제에는 없다), 시간제에서 나올 때 되살린다.
     void onMode(CCObject*) {
-        if (!m_pending && !m_readOnly) {
-            if (m_rules.mode == 0 && m_platformer) {
-                error("<cy>Platformer</c> maps do not support <cr>Percent mode</c>. Use Attempts mode.");
+        if (m_pending || m_readOnly) return;
+        int next = (m_rules.mode + 1) % 3;
+        if (m_platformer && next != 0) {
+            if (m_rules.mode == 0) {
+                error("<cy>Platformer</c> maps do not support <cr>Percent</c> or <cr>Time</c> mode. Use Attempts mode.");
                 return;
             }
-            readValue();
-            m_rules.mode = 1 - m_rules.mode;
-            refresh();
+            next = 0;
         }
+        readValue();
+        if (next == 2) {
+            m_savedPractice = m_rules.practice;
+            m_rules.practice = false;
+        } else if (m_rules.mode == 2)
+            m_rules.practice = m_savedPractice;
+        m_rules.mode = next;
+        refresh();
+    }
+    // 시간제의 시간 방식 전환 (Fixed: 정한 시간 / Map %: 맵 길이의 비율).
+    void onTimeType(CCObject*) {
+        if (m_pending || m_readOnly || m_rules.mode != 2) return;
+        readValue();
+        m_rules.timeType = 1 - m_rules.timeType;
+        refresh();
     }
     void onHacks(CCObject*) {
         if (m_pending || m_readOnly) return;
@@ -3671,18 +3794,23 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         refresh();
     }
     void onPractice(CCObject*) {
-        if (m_pending || m_readOnly) return;
+        if (m_pending || m_readOnly || m_rules.mode == 2) return;
         readValue();
         m_rules.practice = !m_rules.practice;
         refresh();
     }
+    // -/+: 시도 횟수와 목표 %는 1씩, 시간제는 10초 또는 10%씩.
     void adjust(int amount) {
         if (m_pending || m_readOnly) return;
         readValue();
         if (m_rules.mode == 0)
             m_rules.attempts = std::clamp(m_rules.attempts + amount, 1, 99);
-        else
+        else if (m_rules.mode == 1)
             m_rules.targetPercent = std::clamp(m_rules.targetPercent + amount, 1, 100);
+        else if (m_rules.timeType == 0)
+            m_rules.timeSeconds = std::clamp(m_rules.timeSeconds + amount * 10, kTimeMinSeconds, kTimeMaxSeconds);
+        else
+            m_rules.timePercent = std::clamp(m_rules.timePercent + amount * 10, 1, kTimePercentMax);
         refresh();
     }
     void onLess(CCObject*) { adjust(-1); }
@@ -4051,9 +4179,10 @@ class LobbyLayer : public SceneLayer {
         rowSprite->addChild(modeBadge);
         label(rowSprite, "GROUP", {badgeX + badgeWidth / 2.f, rowHeight * .66f}, .28f, badgeWidth - 8.f, accent);
         auto const groupSpeed = room.rules.speed != 100 ? " / " + speedText(room.rules.speed) : std::string();
-        auto const groupRule = room.rules.mode == 1  ? fmt::format("First to {}%", room.rules.targetPercent)
-                               : room.rules.practice ? std::string("Practice")
-                                                     : fmt::format("{} Lives", room.rules.attempts);
+        auto const groupRule = room.rules.mode == 2   ? fmt::format("Time {} (Beta)", timeRuleText(room.rules))
+                               : room.rules.mode == 1 ? fmt::format("First to {}%", room.rules.targetPercent)
+                               : room.rules.practice  ? std::string("Practice")
+                                                      : fmt::format("{} Lives", room.rules.attempts);
         label(rowSprite,
               (room.level.id > 0 ? fmt::format("{} / {}", room.level.name, groupRule)
                : room.random     ? fmt::format("Random Map / {}", groupRule)
@@ -4120,6 +4249,7 @@ class LobbyLayer : public SceneLayer {
             auto const& room = m_rooms[index];
             bool const full = room.guest.has_value();
             auto const accent = room.debug             ? ccc3(255, 110, 90)
+                                : room.rules.mode == 2 ? ccc3(255, 190, 110)
                                 : room.rules.mode == 1 ? ccc3(163, 221, 255)
                                                        : ccc3(80, 221, 255);
             auto const stateColor = room.started ? ccc3(255, 203, 117) : full ? kMuted : ccc3(117, 247, 184);
@@ -4164,10 +4294,12 @@ class LobbyLayer : public SceneLayer {
                 room.host.membership, room.host.cosmetics);
             auto* modeBadge = NineSlice::create("square02b_001.png");
             modeBadge->setContentSize({badgeWidth, rowHeight - 10.f});
-            modeBadge->setColor(room.rules.mode == 1 ? ccc3(23, 68, 119) : ccc3(7, 56, 85));
+            modeBadge->setColor(room.rules.mode == 2   ? ccc3(92, 52, 18)
+                                : room.rules.mode == 1 ? ccc3(23, 68, 119)
+                                                       : ccc3(7, 56, 85));
             modeBadge->setPosition({badgeX + badgeWidth / 2.f, rowHeight / 2.f});
             rowSprite->addChild(modeBadge);
-            label(rowSprite, room.rules.mode == 1 ? "PERCENT" : "ATTEMPTS",
+            label(rowSprite, room.rules.mode == 2 ? "TIME (BETA)" : room.rules.mode == 1 ? "PERCENT" : "ATTEMPTS",
                   {badgeX + badgeWidth / 2.f, rowHeight * .66f}, .28f, badgeWidth - 8.f, accent);
             label(rowSprite, rulesText(room.rules), {badgeX + badgeWidth / 2.f, rowHeight * .32f}, .41f,
                   badgeWidth - 8.f, kIce, false, "chatFont.fnt");
@@ -4401,13 +4533,18 @@ void ruleChips(CCNode* parent, GameRules const& rules, CCPoint center, float max
         std::string text;
         ccColor3B color;
     };
+    // 시간제(베타)는 연습 칩 자리에 BETA 칩을 둔다(시간제에는 연습 규칙이 없다).
     std::vector<Chip> chips{
-        {rules.mode == 1  ? fmt::format("FIRST TO {}%", rules.targetPercent)
-         : rules.practice ? std::string("FEWEST ATTEMPTS")
-                          : fmt::format("{}{} {}", rules.livesFollowMap() ? "AUTO " : "", rules.attempts,
-                                        rules.attempts == 1 ? "ATTEMPT" : "ATTEMPTS"),
+        {rules.mode == 2   ? (rules.timeType == 1 ? fmt::format("TIME {}% OF MAP", rules.timePercent)
+                                                  : "TIME " + timeValueText(rules.timeSeconds))
+         : rules.mode == 1 ? fmt::format("FIRST TO {}%", rules.targetPercent)
+         : rules.practice  ? std::string("FEWEST ATTEMPTS")
+                           : fmt::format("{}{} {}", rules.livesFollowMap() ? "AUTO " : "", rules.attempts,
+                                         rules.attempts == 1 ? "ATTEMPT" : "ATTEMPTS"),
          ccc3(255, 215, 90)},
-        {rules.practice ? "PRACTICE ON" : "PRACTICE OFF", rules.practice ? ccc3(120, 230, 255) : ccc3(170, 185, 210)},
+        rules.mode == 2 ? Chip{"TIME MODE BETA", ccc3(255, 110, 120)}
+                        : Chip{rules.practice ? "PRACTICE ON" : "PRACTICE OFF",
+                               rules.practice ? ccc3(120, 230, 255) : ccc3(170, 185, 210)},
         {rules.allowHacks ? "HACKS ALLOWED" : "ANTI-CHEAT ON",
          rules.allowHacks ? ccc3(255, 150, 70) : ccc3(135, 255, 175)},
     };

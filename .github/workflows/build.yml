@@ -20,10 +20,6 @@ env:
   # Geode CLI 버전 고정(v1.0.5를 빌드할 때의 최신 릴리스). 빌드 액션도 아래에서 커밋으로 고정한다(main, 2026-11-03).
   # 둘 중 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는 보장이 없어진다.
   GEODE_CLI: v4.0.0
-  # Windows·macOS 러너 이미지의 CMake도 고정한다. 이미지의 CMake는 이미지가 바뀔 때마다 최신으로 올라가는데,
-  # windows-latest 20261116 이미지(CMake 4.5)부터 코드 생성기(Codegen) 설정 중 PEGTL의 try_compile이
-  # "Failed to generate test project build system"으로 실패했다. 마지막으로 빌드된 이미지와 같은 4.4.5.
-  CMAKE_PIN: 4.4.5
 
 jobs:
   build:
@@ -62,39 +58,21 @@ jobs:
             if [ "$count" -eq 0 ]; then echo "resources/$folder is empty"; exit 1; fi
           done
 
-      - name: Pin CMake
-        if: runner.os != 'Linux'
+      - name: Use Visual Studio's Clang
+        if: runner.os == 'Windows'
         shell: bash
         run: |
-          # Kitware 공식 릴리스 파일을 받아 SHA-256을 확인하고 PATH 맨 앞에 둔다 (Linux는 이미지의 3.31을 그대로 쓴다).
+          # Windows 이미지는 Visual Studio를 올려도 C:\Program Files\LLVM의 Clang은 그대로 둔다. 새 VS의 C++ 표준
+          # 라이브러리(MSVC STL)는 그 Clang이 너무 낮으면 헤더에서 "STL1000: Unexpected compiler version"으로
+          # 막는다 - windows-latest 20261116 이미지(VS 18.12 + LLVM 20.1.8)부터 Codegen의 PEGTL이 <filesystem>
+          # 시험 컴파일에 실패해 Boost를 찾다 멈췄다. VS에 같이 들어 있는 Clang은 그 STL과 늘 맞으므로 그걸 앞에 둔다.
           set -euo pipefail
-          v="$CMAKE_PIN"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            dir="$(cygpath -u "$RUNNER_TEMP")"
-            file="cmake-$v-windows-x86_64.zip"
-            sum=326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004
-          else
-            dir="$RUNNER_TEMP"
-            file="cmake-$v-macos-universal.tar.gz"
-            sum=679e77a96b9ef9484cc6c1445255fc4f84206b48a65420efbedf16bdab55fbff
-          fi
-          cd "$dir"
-          curl -sSfL --retry 3 -o "$file" "https://github.com/Kitware/CMake/releases/download/v$v/$file"
-          python3 - "$file" "$sum" <<'PY'
-          import hashlib, sys
-          digest = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()
-          sys.exit(0 if digest == sys.argv[2] else f"SHA-256 mismatch for {sys.argv[1]}: {digest}")
-          PY
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            7z x -y "$file" > /dev/null
-            bin="$dir/cmake-$v-windows-x86_64/bin"
-            cygpath -w "$bin" >> "$GITHUB_PATH"
-          else
-            tar xzf "$file"
-            bin="$dir/cmake-$v-macos-universal/CMake.app/Contents/bin"
-            echo "$bin" >> "$GITHUB_PATH"
-          fi
-          "$bin/cmake" --version | sed -n 1p
+          vs="$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' \
+            -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath)"
+          bin="$(cygpath -u "$vs")/VC/Tools/Llvm/x64/bin"
+          test -x "$bin/clang.exe" && test -x "$bin/clang++.exe"
+          cygpath -w "$bin" >> "$GITHUB_PATH"
+          "$bin/clang++.exe" --version | sed -n 1p
 
       - name: Toolchain
         shell: bash

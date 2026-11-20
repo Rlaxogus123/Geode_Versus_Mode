@@ -1,6 +1,6 @@
 // 1v1 배틀의 진행 규칙을 계산하는 순수 함수 모음(일시 정지 예산, 시도 소모, 종료/승리 판정, 관전 좌석).
 // BattlePlayerState와 GameRules만 받아 판단하므로 네트워크나 PlayLayer에 의존하지 않는다.
-// GameRules.mode 0은 시도 횟수(attempts) 방식, 1은 목표 퍼센트(targetPercent) 레이스 방식이다.
+// GameRules.mode 0은 시도 횟수(attempts) 방식, 1은 목표 퍼센트(targetPercent) 레이스 방식, 2는 시간제(Time)다.
 #pragma once
 #include "VersusService.hpp"
 #include <algorithm>
@@ -10,6 +10,8 @@
 namespace versus::battle {
 // 한 배틀에서 플레이어당 쓸 수 있는 일시 정지 총 시간(ms).
 inline constexpr int64_t PAUSE_BUDGET_MS = 20000;
+// 서버가 받아 적는 일시 정지 사용량의 상한(ms, 서버 PAUSE_VALUE_MAX_MS).
+inline constexpr int64_t PAUSE_VALUE_MAX_MS = 30000;
 // 시도와 시도 사이(죽은 뒤 다음 시도 시작 전)에만 일시 정지를 허용한다.
 inline bool canPauseBetweenAttempts(BattlePlayerState const& player, bool nativeDead) {
     return nativeDead && !player.inAttempt && !player.cleared && !player.forfeited && !player.spectating;
@@ -40,10 +42,12 @@ inline bool adoptBattleReport(bool started, std::string_view launchID, std::stri
     return !started || launchID != expectedID || battleID != expectedID || releasedAt <= 0 || finishedAt > 0;
 }
 
-// 더 이상 시도할 수 없는 상태: 포기했거나 클리어했거나, 시도 모드에서 시도를 모두 썼음.
+// 더 이상 시도할 수 없는 상태: 포기했거나 클리어했거나, 시도 모드에서 시도를 모두 썼거나, 시간제에서 마지막 판을
+// 다 했음.
 inline bool terminal(BattlePlayerState const& player, GameRules const& rules) {
     return player.forfeited || player.cleared ||
-           (rules.mode == 0 && !rules.practice && player.attemptsUsed >= rules.attempts);
+           (rules.mode == 0 && !rules.practice && player.attemptsUsed >= rules.attempts) ||
+           (rules.mode == 2 && timeLastRunPlayed(player));
 }
 // 시도 모드에서 상대의 시도가 모두 소진되어 결과가 정해졌는지(조기 승리) 판단한다.
 // candidate가 클리어했는데 상대가 더 많이 시도했거나, 상대가 소진했고 candidate가 더 멀리 갔으며
@@ -89,6 +93,7 @@ inline void reconcileProgress(BattlePlayerState& local, BattlePlayerState const&
     local.userCoins = std::max(local.userCoins, confirmed.userCoins);
     local.cleared = local.cleared || confirmed.cleared;
     local.forfeited = local.forfeited || confirmed.forfeited;
+    if (local.lastRun == 0) local.lastRun = confirmed.lastRun;  // 시간제: 서버가 정한 마지막 판
     if (terminal(local, rules)) {
         local.inAttempt = false;
         local.spectating = true;
@@ -107,6 +112,7 @@ inline int raceReached(BattlePlayerState const& player) {
 inline bool finalByPlay(BattlePlayerState const& player, GameRules const& rules) {
     if (player.forfeited) return false;
     if (player.cleared) return true;
+    if (rules.mode == 2) return timeLastRunPlayed(player);
     if (rules.mode == 0 && !rules.practice && player.attemptsUsed >= rules.attempts) return true;
     return rules.mode == 1 && raceReached(player) >= rules.targetPercent;
 }
