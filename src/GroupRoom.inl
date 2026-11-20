@@ -858,6 +858,9 @@ class GroupRoomLayer : public SceneLayer {
     // 1.0.8: 따로 둔 음악 건너뛰기 버튼과, 맵별로 보인 뒤 1초 대기
     Weak<CCMenuItemSpriteExtra> m_skipMusic;
     SkipMusicArm m_skipArm;
+    // 1.0.8: 맵의 노래 줄과, Jukebox 목록을 여는 보이지 않는 GD 노래 위젯(다시 그려도 남게 이 화면이 든다).
+    Weak<SongStrip> m_songStrip;
+    song::JukeboxOpener m_jukebox;
     bool m_pending = false, m_sendingEmote = false, m_renderQueued = false, m_leaveAsked = false;
     float m_emoteCooldown = 0.f, m_elapsed = 1.f;
     std::string m_signature, m_rowSignature;
@@ -1288,6 +1291,19 @@ class GroupRoomLayer : public SceneLayer {
                          });
     }
 
+    // 1.0.8: 맵의 노래 줄을 center에 붙인다(폭 width, 높이 20). 원판을 누르면 이 화면이 Jukebox 목록을 연다.
+    void addSongStrip(int64_t levelID, CCPoint center, float width) {
+        auto* strip = SongStrip::create(levelID, {width, 20.f}, [self = Weak<GroupRoomLayer>(this)](int songID) {
+            if (auto owner = self.lock()) owner->m_jukebox.open(owner.data(), songID);
+        });
+        if (!strip) return;
+        strip->setID("group-song-strip"_spr);
+        strip->setPosition(center);
+        m_dynamic->addChild(strip, 5);
+        strip->refresh(!m_cacheError.empty());
+        m_songStrip = strip;
+    }
+
     // 방의 맵을 다운로드한다. generation으로 맵이 바뀐 뒤 도착한 오래된 응답을 무시한다.
     void beginDownload() {
         auto const& room = Service::get().group();
@@ -1398,6 +1414,7 @@ class GroupRoomLayer : public SceneLayer {
         m_dynamic->removeAllChildrenWithCleanup(true);
         m_downloadLabel = nullptr;
         m_downloadKey.clear();
+        m_songStrip = nullptr;
         m_countdownLabel = nullptr;
         bool const owner = host();
         auto const* mine = room.member(self());
@@ -1438,8 +1455,11 @@ class GroupRoomLayer : public SceneLayer {
         styleRowsToolbar(room);
         if (poolShown) {
             float const bottom = counting || downloadShown ? kBannerY + 16.f : kBarBottom + kBarHeight + 4.f;
+            // 1.0.8: 다음 맵(NEXT)이 있으면 그 노래 줄을 목록 위에 두고 목록을 그만큼 줄인다.
+            float const strip = room.level.id > 0 ? 23.f : 0.f;
+            if (room.level.id > 0) addSongStrip(room.level.id, {centerX, top - 14.f}, sideWidth - 8.f);
             auto* list = MapPoolList::create(
-                {sideWidth - 8.f, top - 4.f - bottom},
+                {sideWidth - 8.f, top - 4.f - strip - bottom},
                 [self = Weak<GroupRoomLayer>(this)] {
                     if (auto owner = self.lock()) owner->onChoose(nullptr);
                 },
@@ -1450,17 +1470,19 @@ class GroupRoomLayer : public SceneLayer {
             list->setPosition({sideX + 4.f, bottom});
             m_dynamic->addChild(list, 3);
         } else if (room.level.id > 0) {
+            // 1.0.8: 맵 정보를 조금 올리고(얼굴도 조금 작게) 별 줄 아래에 노래 줄을 둔다.
             if (auto* face = mapDifficulty(room.level)) {
-                face->setScale(sideWidth < 160.f ? .75f : .9f);
-                face->setPosition({centerX, top - 30.f});
+                face->setScale(sideWidth < 160.f ? .68f : .8f);
+                face->setPosition({centerX, top - 27.f});
                 m_dynamic->addChild(face);
             }
-            label(m_dynamic, room.level.name, {centerX, top - 61.f}, .42f, sideWidth - 12.f);
-            label(m_dynamic, room.level.creator.empty() ? "Unknown creator" : room.level.creator, {centerX, top - 76.f},
+            label(m_dynamic, room.level.name, {centerX, top - 55.f}, .42f, sideWidth - 12.f);
+            label(m_dynamic, room.level.creator.empty() ? "Unknown creator" : room.level.creator, {centerX, top - 69.f},
                   .36f, sideWidth - 12.f, ccWHITE, false, "goldFont.fnt");
             starRating(m_dynamic, std::to_string(room.level.stars),
-                       {centerX - (room.level.userCoins > 0 ? 20.f : 0.f), top - 92.f}, .34f, sideWidth * .5f);
-            mapCoinCount(m_dynamic, room.level, {centerX + 20.f, top - 92.f});
+                       {centerX - (room.level.userCoins > 0 ? 20.f : 0.f), top - 84.f}, .34f, sideWidth * .5f);
+            mapCoinCount(m_dynamic, room.level, {centerX + 20.f, top - 84.f});
+            addSongStrip(room.level.id, {centerX, top - 104.f}, sideWidth - 12.f);
         } else if (room.mapSelection.random) {
             label(m_dynamic, groupDrawing(room) ? "ROLLING A RANDOM MAP..." : "RANDOM MAP", {centerX, top - 9.f}, .4f,
                   sideWidth - 14.f, ccc3(255, 214, 120), false, "goldFont.fnt");
@@ -1973,6 +1995,7 @@ public:
             m_progressElapsed = 0.f;
             updateDownload();
             armSkipMusic(m_skipMusic, m_skipArm, std::to_string(m_mapID));
+            if (auto strip = m_songStrip.lock()) strip->refresh(!m_cacheError.empty());
         }
         updateCountdown();
         m_elapsed += dt;

@@ -4443,6 +4443,9 @@ bool readyBlockedByCheat(GameRules const& rules) {
     return true;
 }
 
+// 1.0.8: 맵의 노래 정보, Jukebox 열기, 방의 노래 줄(SongStrip) - 방과 Ranked가 같이 쓴다.
+#include "SongStrip.inl"
+
 // 방 화면 가운데 영역의 버튼 줄 항목 (노드, 폭, 아래에 붙일 캡션).
 struct RoomRowItem {
     CCNode* item;
@@ -4500,6 +4503,9 @@ class RoomLayer : public SceneLayer {
     // 1.0.8: 따로 둔 음악 건너뛰기 버튼과, 맵별로 보인 뒤 1초 대기
     Weak<CCMenuItemSpriteExtra> m_skipMusic;
     SkipMusicArm m_skipArm;
+    // 1.0.8: 맵의 노래 줄과, Jukebox 목록을 여는 보이지 않는 GD 노래 위젯(다시 그려도 남게 이 화면이 든다).
+    Weak<SongStrip> m_songStrip;
+    song::JukeboxOpener m_jukebox;
     std::string m_cacheError;
     std::string m_seenEmote;
     std::string m_signature;
@@ -4586,6 +4592,19 @@ class RoomLayer : public SceneLayer {
         m_readyGlow->setColor(color);
         m_readyGlow->setOpacity(static_cast<GLubyte>(130.f + 55.f * std::sin(m_readyPhase * 2.f)));
         m_readySprite->m_BGSprite->setColor(color);
+    }
+
+    // 1.0.8: 맵의 노래 줄을 center에 붙인다(폭 width, 높이 22). 원판을 누르면 이 화면이 Jukebox 목록을 연다.
+    void addSongStrip(CCNode* parent, int64_t levelID, CCPoint center, float width) {
+        auto* strip = SongStrip::create(levelID, {width, 22.f}, [self = Weak<RoomLayer>(this)](int songID) {
+            if (auto owner = self.lock()) owner->m_jukebox.open(owner.data(), songID);
+        });
+        if (!strip) return;
+        strip->setID("room-song-strip"_spr);
+        strip->setPosition(center);
+        parent->addChild(strip, 5);
+        strip->refresh(!m_cacheError.empty());
+        m_songStrip = strip;
     }
 
     // 방의 맵을 아직 받지 않았으면 다운로드를 시작한다. 세대 번호(generation)로 맵이 바뀐 뒤 도착한
@@ -4831,6 +4850,7 @@ class RoomLayer : public SceneLayer {
         m_signature = signature(room);
         m_readyGlow = nullptr;
         m_readySprite = nullptr;
+        m_songStrip = nullptr;
         for (auto& widgets : m_downloads) widgets = {};
         m_content->removeAllChildrenWithCleanup(true);
         float const width = std::min(550.f, m_window.width - 44.f);
@@ -4917,8 +4937,10 @@ class RoomLayer : public SceneLayer {
         }
         // 가운데 영역: 맵 풀 목록 / 랜덤 맵 필터 카드 / 선택된 맵 정보(난이도 얼굴, 이름, 제작자, 별, 코인) 중 하나.
         if (room.mapPool) {
+            // 1.0.8: 다음 맵(NEXT)이 있으면 그 노래 줄을 목록 위에 두고 목록을 그만큼 줄인다.
+            float const strip = room.level.id > 0 ? 24.f : 0.f;
             auto* list = MapPoolList::create(
-                {centerWidth + 6.f, cardHeight},
+                {centerWidth + 6.f, cardHeight - strip},
                 [self = Weak<RoomLayer>(this)] {
                     if (auto owner = self.lock()) owner->onChoose(nullptr);
                 },
@@ -4927,6 +4949,7 @@ class RoomLayer : public SceneLayer {
                 });
             list->setPosition({centerX - (centerWidth + 6.f) / 2.f, cardBottom});
             frame->addChild(list, 3);
+            if (room.level.id > 0) addSongStrip(frame, room.level.id, {centerX, cardTop - 11.f}, centerWidth + 6.f);
         } else if (!room.level.id && room.mapSelection.random) {
             label(frame, "Random Map", {centerX, height - 59.f}, .6f, centerWidth - 10.f)
                 ->setID("random-map-title"_spr);
@@ -4960,6 +4983,8 @@ class RoomLayer : public SceneLayer {
                            {centerX - (room.level.userCoins > 0 ? 24.f : 0.f), height - 106.f}, .34f,
                            centerWidth * .5f);
                 mapCoinCount(frame, room.level, {centerX + 24.f, height - 106.f}, .3f);
+                // 1.0.8: 맵 상자 아래쪽(제작자 줄 밑)에 노래 줄 - 랜덤 맵이 뽑힌 뒤에도 같은 자리.
+                addSongStrip(frame, room.level.id, {centerX, height - 149.f}, centerWidth - 4.f);
             }
         }
         // READY 버튼. 맵이 정해졌는지, 내려받았는지, 요청 중인지에 따라 문구와 활성 상태를 정한다
@@ -5397,6 +5422,7 @@ public:
                 updateDownloads(*room);
                 armSkipMusic(m_skipMusic, m_skipArm, std::to_string(room->level.id));
             }
+            if (auto strip = m_songStrip.lock()) strip->refresh(!m_cacheError.empty());
         }
         m_elapsed += dt;
         if (m_elapsed < firebase_config::ROOM_POLL_INTERVAL_SECONDS) return;
@@ -7413,54 +7439,9 @@ class RankedLayer final : public SceneLayer {
     }
     // 1.0.8: Season 2 매치 카드의 오른쪽 칸 - 맵의 노래(이름, 작곡가, ID, 크기)와 받기 상태.
     // Jukebox(fleym.nongd)가 켜져 있으면 왼쪽 원판이 그 NONG 목록을 여는 버튼이 된다: 노래를 못 받는 맵이어도
-    // 플레이어가 다른 음원(NONG)을 골라 받을 수 있다. Jukebox에는 다른 모드가 부를 수 있는 기능이 없어서, GD의
-    // 노래 위젯(CustomSongWidget)을 보이지 않게 만들어 Jukebox가 그 위젯에 붙이는 버튼(nong-button)을 대신 누른다
-    // (GD 레벨 화면에서 그 버튼을 누르는 것과 같음). 받은 NONG은 GD가 받은 노래로 치므로(Jukebox의 pathForSong)
-    // 다운로드 칸과 이 칸이 바로 READY가 된다.
-    static constexpr char const* kJukeboxID = "fleym.nongd";
-    struct MapSong {
-        int id = 0;              // 커스텀 노래 ID (0: GD 공식 노래)
-        bool official = false;
-        int more = 0;            // 이 맵이 쓰는 다른 노래 수
-        std::string name, artist;
-        float sizeMB = 0.f;
-    };
-    // 캐시된 레벨에서 대표 노래를 찾는다. 노래 정보(이름 등)는 GD가 받아 둔 만큼만.
-    static std::optional<MapSong> mapSong(int64_t levelID) {
-        auto* level = cachedLevel(levelID);
-        if (!level) return std::nullopt;
-        MapSong song;
-        song.id = level->m_songID;
-        if (song.id <= 0) {
-            song.official = true;
-            song.id = 0;
-            int const track = level->m_audioTrack;
-            song.name = std::string(LevelTools::getAudioTitle(track));
-            song.artist = std::string(LevelTools::nameForArtist(LevelTools::artistForAudio(track)));
-        } else {
-            auto* music = MusicDownloadManager::sharedState();
-            SongInfoObject* info = song.id >= 10'000'000 ? music->getMusicObject(song.id) : nullptr;
-            if (!info) info = music->getSongInfoObject(song.id);
-            if (info) {
-                song.name = std::string(info->m_songName);
-                song.artist = std::string(info->m_artistName);
-                song.sizeMB = info->m_fileSize;
-            }
-        }
-        std::set<int> others;
-        std::string const list(level->m_songIDs);
-        for (size_t at = 0; at < list.size();) {
-            size_t const end = std::min(list.find(',', at), list.size());
-            int value = 0;
-            auto const parsed = std::from_chars(list.data() + at, list.data() + end, value);
-            if (parsed.ec == std::errc() && value > 0 && value != song.id) others.insert(value);
-            at = end + 1;
-        }
-        song.more = static_cast<int>(others.size());
-        return song;
-    }
+    // 플레이어가 다른 음원(NONG)을 골라 받을 수 있다(song::JukeboxOpener, SongStrip.inl - 방의 노래 줄과 같은 방식).
     // 노래 칸의 상태 글자와 색.
-    std::pair<std::string, ccColor3B> songStatus(RankedMatch const& match, MapSong const& song) const {
+    std::pair<std::string, ccColor3B> songStatus(RankedMatch const& match, song::MapSong const& song) const {
         ccColor3B const ready = ccc3(135, 255, 175);
         if (song.official) return {"READY", ready};
         auto* music = MusicDownloadManager::sharedState();
@@ -7476,33 +7457,17 @@ class RankedLayer final : public SceneLayer {
         if (percent > 0) return {fmt::format("{}%", std::clamp(percent, 0, 99)), kIce};
         return {"WAITING", kMuted};
     }
-    // 줄 하나를 폭에 맞춘다: minScale까지 줄이고, 그래도 넘치면 뒤를 잘라 "..."을 붙인다(긴 노래 이름).
-    static void fitLine(CCLabelBMFont* line, float maxWidth, float scale, float minScale) {
-        if (!line || maxWidth <= 0.f) return;
-        line->setScale(scale);
-        float const full = line->getContentSize().width;
-        if (full * scale <= maxWidth) return;
-        line->setScale(std::max(minScale, maxWidth / std::max(1.f, full)));
-        std::string text = line->getString();
-        while (text.size() > 1 && line->getContentSize().width * line->getScale() > maxWidth) {
-            text.pop_back();
-            while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80) text.pop_back();
-            while (!text.empty() && text.back() == ' ') text.pop_back();
-            line->setString((text + "...").c_str());
-        }
-    }
     Weak<CCNode> m_songCard;
     std::string m_songCardKey;
     int m_songCardSong = 0;
-    geode::Ref<CustomSongWidget> m_jukeboxWidget;
-    int m_jukeboxWidgetSong = 0;
+    song::JukeboxOpener m_jukebox;
     // 노래 칸을 만들거나 상태만 고친다. 맵·노래 정보가 바뀌면 다시 만든다.
     void refreshSongCard(RankedMatch const& match) {
         if (!m_preview || m_lastResult || !m_season2) return;
         auto const size = m_preview->getContentSize();
         float const width = songCardWidth(size.width), height = kCardHeight;
-        std::optional<MapSong> song = match.selectedMap ? mapSong(match.selectedMap->id) : std::nullopt;
-        bool const jukebox = song && !song->official && song->id > 0 && Loader::get()->isModLoaded(kJukeboxID);
+        std::optional<song::MapSong> song = match.selectedMap ? song::mapSong(match.selectedMap->id) : std::nullopt;
+        bool const jukebox = song && song::jukeboxFor(*song);
         std::string const key =
             !match.selectedMap ? std::string("none")
             : !song            ? fmt::format("{}|map", match.selectedMap->id)
@@ -7519,13 +7484,7 @@ class RankedLayer final : public SceneLayer {
             card = fresh;
             float const left = 36.f, textW = std::max(30.f, width - left - 6.f);
             // 왼쪽 원판: Jukebox가 있으면 그 목록을 여는 버튼(Jukebox의 원판 그림), 없으면 음악 표시만.
-            CCSprite* disc = nullptr;
-            if (jukebox) {
-                if (auto* frame = cachedFrame("fleym.nongd/JB_PinDisc.png")) disc = CCSprite::createWithSpriteFrame(frame);
-            }
-            if (!disc) disc = loadedFrameSprite("GJ_musicOnBtn_001.png", "GJ_GameSheet03.plist");
-            if (disc) {
-                disc->setScale(22.f / std::max(1.f, disc->getContentSize().height));
+            if (auto* disc = song::disc(jukebox, 22.f)) {
                 if (jukebox) {
                     auto* holder = CCMenu::create();
                     holder->setPosition({0.f, 0.f});
@@ -7549,15 +7508,12 @@ class RankedLayer final : public SceneLayer {
                 label(card, "Loading map...", {left, height / 2.f + 1.f}, .45f, textW, kMuted, true, "chatFont.fnt");
                 return;
             }
-            std::string const name = !song->name.empty() ? song->name
-                                     : song->official    ? std::string("Official song")
-                                                         : fmt::format("Song {}", song->id);
-            auto* title = label(card, name, {left, height - 11.f}, .28f, 0.f, ccWHITE, true, "bigFont.fnt");
+            auto* title = label(card, song::title(*song), {left, height - 11.f}, .28f, 0.f, ccWHITE, true, "bigFont.fnt");
             title->setID("ranked-song-name"_spr);
-            fitLine(title, textW, .28f, .19f);
-            fitLine(label(card, "by " + (song->artist.empty() ? std::string("Unknown") : song->artist),
-                          {left, height - 21.f}, .24f, 0.f, ccc3(255, 214, 120), true, "goldFont.fnt"),
-                    textW, .24f, .17f);
+            song::fitLine(title, textW, .28f, .19f);
+            song::fitLine(label(card, "by " + (song->artist.empty() ? std::string("Unknown") : song->artist),
+                                {left, height - 21.f}, .24f, 0.f, ccc3(255, 214, 120), true, "goldFont.fnt"),
+                          textW, .24f, .17f);
             std::string info = song->official ? std::string("GD song") : fmt::format("ID {}", song->id);
             if (!song->official && song->sizeMB > 0.f) info += fmt::format("  {:.1f}MB", song->sizeMB);
             if (song->more > 0) info += fmt::format("  +{}", song->more);
@@ -7577,33 +7533,9 @@ class RankedLayer final : public SceneLayer {
             state->setColor(color);
         }
     }
-    // Jukebox 원판: 보이지 않는 GD 노래 위젯에 Jukebox가 붙인 버튼을 누른다(그 노래의 NONG 목록이 열린다).
+    // Jukebox 원판: 보이지 않는 GD 노래 위젯(이 화면에 붙여 둠)에 Jukebox가 붙인 버튼을 누른다.
     void onSongJukebox(CCObject*) {
-        auto card = m_songCard.lock();
-        int const id = m_songCardSong;
-        if (!card || id <= 0 || !Loader::get()->isModLoaded(kJukeboxID)) return;
-        if (!m_jukeboxWidget || m_jukeboxWidgetSong != id || m_jukeboxWidget->getParent() != card.data()) {
-            if (m_jukeboxWidget) m_jukeboxWidget->removeFromParent();
-            auto* music = MusicDownloadManager::sharedState();
-            bool const library = id >= 10'000'000;
-            SongInfoObject* info = library ? music->getMusicObject(id) : nullptr;
-            if (!info) info = music->getSongInfoObject(id);
-            if (!info) info = SongInfoObject::create(id);
-            auto* widget = info ? CustomSongWidget::create(info, nullptr, false, false, false, false, false, library, 0)
-                                : nullptr;
-            if (!widget) return;
-            widget->setVisible(false);
-            card->addChild(widget, -5);
-            m_jukeboxWidget = widget;
-            m_jukeboxWidgetSong = id;
-        }
-        if (auto* opener = typeinfo_cast<CCMenuItemSpriteExtra*>(
-                m_jukeboxWidget->getChildByIDRecursive(std::string(kJukeboxID) + "/nong-button"))) {
-            opener->activate();
-            return;
-        }
-        Notification::create("Jukebox can't open this song yet. Try again in a moment.", NotificationIcon::Warning)
-            ->show();
+        if (m_songCard.lock() && m_songCardSong > 0) m_jukebox.open(this, m_songCardSong);
     }
     // 티어 밴드가 바뀌면 현재 색(전환 중이면 중간색)에서 새 테마로 전환을 시작하고 밴드
     // 카드를 살짝 튕긴다.
