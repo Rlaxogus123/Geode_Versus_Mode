@@ -5,6 +5,7 @@
 #include "Season2Lounge.hpp"
 #include "Season2LoungeLevel.hpp"
 #include "BattleLevelData.hpp"
+#include "GdRequests.hpp"
 #include "GroupFreePlay.hpp"
 #include "MapCache.hpp"
 #include "MatchLaunch.hpp"
@@ -157,6 +158,7 @@ constexpr int kLoungeGameVersion = 22;
 // lounge 맵 레벨 하나를 최신으로 유지한다. GD 서버에서 레벨 ID로 검색해 버전을 확인하고,
 // 로컬 캐시보다 새롭거나 효과음 정보가 없으면 내려받아 캐시 파일(첫 줄: ID 버전 sfx:목록, 다음: 레벨 문자열)에 저장한다.
 // 제한 시간 안에 응답이 없거나 실패하면 가진 복사본을 그대로 쓴다. m_after는 먼저 끝나야 하는 앞선 맵(동시 요청 방지).
+// 1.0.8: 응답은 GdRequests 라우터로 받는다(GD의 델리게이트 자리를 쥐지도, 비기를 기다리지도 않는다).
 class LoungeMap final : public CCNode, public LevelManagerDelegate, public LevelDownloadDelegate {
     using Clock = std::chrono::steady_clock;
     enum class Step { Idle, Searching, Downloading, Done };
@@ -216,12 +218,13 @@ class LoungeMap final : public CCNode, public LevelManagerDelegate, public Level
         }
         return result;
     }
-    // GD 레벨 매니저에 걸어 둔 델리게이트를 해제하고 진행 중 플래그를 내린다. finish는 확인 절차를 마무리한다.
+    // 진행 중 플래그를 내린다. 기다리던 검색의 늦은 응답은 버리고, 다운로드의 늦은 응답은 그래도 받아 캐시를
+    // 새로 고친다(GD Saved 정리 포함). finish는 확인 절차를 마무리한다.
     void releaseDelegates() {
-        auto* manager = GameLevelManager::sharedState();
-        if (manager->m_levelManagerDelegate == this) manager->m_levelManagerDelegate = nullptr;
-        if (manager->m_levelDownloadDelegate == this) manager->m_levelDownloadDelegate = nullptr;
+        if (m_searchPending) versus::gdnet::drop(m_key);
         m_searchPending = m_downloadPending = false;
+        versus::gdnet::release(static_cast<LevelManagerDelegate*>(this));
+        versus::gdnet::release(static_cast<LevelDownloadDelegate*>(this));
     }
     void finish(char const* why, bool failed) {
         releaseDelegates();
@@ -306,7 +309,7 @@ public:
     void loadLevelsFailed(char const* key, int) override { loadLevelsFailed(key); }
     void setupPageInfo(gd::string, char const*) override {}
     void levelDownloadFinished(GJGameLevel* level) override {
-        if (!m_downloadPending || !level || level->m_levelID.value() != m_levelID) return;
+        if (!level || level->m_levelID.value() != m_levelID) return;
         if (!m_wasSaved) versus::dropFromSaved(m_levelID, level);
         std::string const text(level->m_levelString);
         if (!platformerData(text).empty()) {
@@ -321,9 +324,9 @@ public:
                       sfx.empty() ? std::string("none") : sfx);
         } else {
             log::warn("Versus: Season 2 lounge map {} is not a platformer level; kept the copy we had", m_levelID);
-            m_downloadFailed = true;
+            if (m_downloadPending) m_downloadFailed = true;
         }
-        m_downloadDone = true;
+        if (m_downloadPending) m_downloadDone = true;
     }
     void levelDownloadFailed(int) override {
         if (m_downloadPending) {
@@ -331,7 +334,7 @@ public:
         }
     }
     // 상태 머신: Searching(레벨 검색으로 서버 버전 확인) -> Downloading(캐시가 낡았을 때 다운로드) -> Done.
-    // GD 매니저의 델리게이트가 다른 곳에서 쓰이고 있으면 비길 때까지 기다린다.
+    // GD가 같은 키를 이미 요청 중이면 그 요청이 끝날 때까지 기다린다(제한 시간은 그대로).
     void update(float) override {
         if (m_step != Step::Searching && m_step != Step::Downloading) return;
         if (m_after && !m_after->ready() && !m_searchPending && !m_downloadPending) {
@@ -358,14 +361,13 @@ public:
                 m_step = Step::Downloading;
                 return;
             }
-            if (m_searchPending || manager->m_levelManagerDelegate) return;
+            if (m_searchPending) return;
             m_search = GJSearchObject::create(SearchType::Search, gd::string(std::to_string(m_levelID)));
             m_key = m_search->getKey();
             manager->resetTimerForKey(m_key.c_str());
-            if (manager->isDLActive(m_key.c_str())) return;
+            if (versus::gdnet::active(m_key)) return;
             m_searchPending = true;
-            manager->m_levelManagerDelegate = this;
-            manager->getOnlineLevels(m_search);
+            if (!versus::gdnet::search(m_search, this)) m_searchPending = false;
             return;
         }
         if (m_downloadDone) {
@@ -375,13 +377,10 @@ public:
                 finish("updated", false);
             return;
         }
-        if (m_downloadPending || manager->m_levelDownloadDelegate ||
-            manager->isDLActive(manager->getLevelDownloadKey(m_levelID, false, 0)))
-            return;
+        if (m_downloadPending || versus::gdnet::active(versus::gdnet::downloadKey(m_levelID))) return;
         m_downloadPending = true;
         m_wasSaved = versus::inGdSaved(m_levelID);
-        manager->m_levelDownloadDelegate = this;
-        manager->downloadLevel(m_levelID, false, 0);
+        if (!versus::gdnet::download(m_levelID, this)) m_downloadPending = false;
     }
 };
 

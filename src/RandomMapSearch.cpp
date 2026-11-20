@@ -1,9 +1,12 @@
 // 랜덤 맵 후보 검색. GD 온라인 레벨 검색(MostLiked 또는 ID 목록)을 난이도별로 돌려 가며
 // 무작위 페이지를 요청하고, 필터에 맞는 레벨을 모아 최대 10개를 셔플해 콜백으로 돌려준다.
-// 한 번에 하나의 검색만 실행되며, 방/필터가 바뀌거나 90초가 지나면 끝낸다.
+// 한 번에 하나의 검색만 실행되며, 방/필터가 바뀌거나 제한 시간(기본 90초)이 지나면 끝낸다.
+// 1.0.8: 응답은 GdRequests 라우터로 받으므로 GD의 레벨 델리게이트 자리가 비기를 기다리지 않는다. 실패가 이어지면
+// 1~6초씩 쉬고, 두 번 실패한 난이도는 그만 묻는다(전에는 0.4초마다 끝없이 다시 물어 GD 서버에 몰아쳤다).
 #include "RandomMapSearch.hpp"
 #include "RandomMapPolicy.hpp"
 #include "BattleLevelData.hpp"
+#include "GdRequests.hpp"
 #include "LevelSelector.hpp"
 #include "MapCache.hpp"
 #include <Geode/Geode.hpp>
@@ -34,6 +37,8 @@ class RandomSearch final : public CCNode, public LevelManagerDelegate {
         std::vector<LevelInfo> candidates;
         std::set<int> pages;
         int total = 100, requests = 0;
+        // 1.0.8: 이 그룹에서 실패한 요청 수(응답 없음 / GD 실패). 두 번이면 소진으로 본다.
+        int failures = 0;
         int feature = 0;
         std::string ids;
         bool likes = false;
@@ -45,7 +50,9 @@ class RandomSearch final : public CCNode, public LevelManagerDelegate {
         int lastPage() const { return likedPages >= 0 ? std::min(allPages(), likedPages) : allPages(); }
         bool probing() const { return likes && likedPages == -1; }
         // 더 요청할 페이지가 없는지. ID 검색은 1회, 그 외는 최대 6회(좋아요 조건이면 8회) 또는 모든 유효 페이지 요청.
+        // 두 번 실패한 그룹도 소진이다.
         bool exhausted() const {
+            if (failures >= 2) return true;
             if (!ids.empty()) return requests >= 1;
             if (likedPages == -2 || requests >= (likes ? 8 : 6)) return true;
             if (probing()) return false;
@@ -78,18 +85,38 @@ class RandomSearch final : public CCNode, public LevelManagerDelegate {
     Ref<GJSearchObject> search;
     Clock::time_point began, requested, next;
     bool pending = false, completed = false, failed = false;
+    // 1.0.8: 연속 실패 수(쉬는 시간을 정한다)와, GD가 이미 요청 중이라 보내지 못한 키를 처음 본 때.
+    int failuresInRow = 0;
+    std::string busyKey;
+    Clock::time_point busySince;
+    // 후보가 이만큼 모였으면 30초 뒤에는 남은 그룹을 기다리지 않고 끝낸다.
+    static constexpr auto kSoftLimit = std::chrono::seconds(30);
 
     // 이 콜백이 우리가 보낸 요청(key)에 대한 것인지.
     bool owns(char const* value) const { return pending && value && key == value; }
-    void releaseDelegate() {
-        auto* manager = GameLevelManager::sharedState();
-        if (manager->m_levelManagerDelegate == this) manager->m_levelManagerDelegate = nullptr;
+    // 기다리던 요청을 놓는다. 그 응답이 늦게 오면 아무 데도 가지 않는다(다른 화면의 델리게이트에도).
+    void dropPending() {
+        if (pending) versus::gdnet::drop(key);
         pending = false;
+        versus::gdnet::release(this);
+    }
+    size_t needed() const {
+        return extras.minimum > 0 ? static_cast<size_t>(extras.minimum) : MIN_RANDOM_CANDIDATES;
+    }
+    size_t found() const {
+        size_t count = 0;
+        for (auto const& group : groups) count += group.candidates.size();
+        return count;
+    }
+    // 연속 실패 n번째 뒤에 쉬는 시간: 1, 2, 4, 6초.
+    static std::chrono::milliseconds backoff(int failures) {
+        static constexpr int kSeconds[] = {1, 2, 4, 6};
+        return std::chrono::seconds(kSeconds[std::clamp(failures, 1, 4) - 1]);
     }
     // 검색을 끝내고 결과를 콜백에 전달한다. 중복 제거 후 개수가 모자라면 오류를 돌려주고,
     // 성공이면 셔플해서(ID 지정 시 로컬 기록이 없는 맵을 앞으로) 최대 10개만 넘긴다.
     void finish(std::string error = {}) {
-        releaseDelegate();
+        dropPending();
         auto done = std::exchange(callback, {});
         alive = {};
         search = nullptr;
@@ -99,9 +126,14 @@ class RandomSearch final : public CCNode, public LevelManagerDelegate {
                 if (std::none_of(candidates.begin(), candidates.end(),
                                  [&](auto const& old) { return old.id == level.id; }))
                     candidates.push_back(std::move(level));
-        size_t const needed = extras.minimum > 0 ? static_cast<size_t>(extras.minimum) : MIN_RANDOM_CANDIDATES;
+        size_t const needed = this->needed();
+        // 1.0.8: 보낸 요청이 모두 실패했으면 필터가 아니라 GD 서버(또는 연결) 문제다.
+        bool const unanswered =
+            std::any_of(groups.begin(), groups.end(), [](auto const& g) { return g.requests > 0; }) &&
+            std::all_of(groups.begin(), groups.end(), [](auto const& g) { return g.failures >= g.requests; });
         if (error.empty() && candidates.size() < needed)
-            error = needed == MIN_RANDOM_CANDIDATES
+            error = unanswered ? "GD's level servers did not answer the map search. Trying again..."
+                    : needed == MIN_RANDOM_CANDIDATES
                         ? "At least five Classic maps are needed. Try again or change the filter."
                         : "No map of this tier's rules was found yet. Searching again...";
         std::shuffle(candidates.begin(), candidates.end(), rng);
@@ -218,7 +250,9 @@ public:
             finished({}, "No map pool to search.");
             return;
         }
-        completed = failed = false;
+        completed = failed = pending = false;
+        failuresInRow = 0;
+        busyKey.clear();
         began = next = Clock::now();
     }
     // 서버가 알려 주는 페이지 정보 문자열의 첫 필드(전체 레벨 수)를 읽어 현재 그룹에 반영한다.
@@ -272,27 +306,34 @@ public:
             finish("Room/filter changed.");
             return;
         }
-        // 전체 검색 제한 시간 90초.
-        if (now - began > std::chrono::seconds(90)) {
+        // 전체 검색 제한 시간: 기본 90초, 추가 조건에 정해 두었으면 그 시간(Season 2: 서버가 60초에 매치를 끝낸다).
+        auto const elapsed = now - began;
+        if (elapsed > std::chrono::seconds(extras.seconds > 0 ? extras.seconds : 90)) {
             finish();
             return;
         }
         // 응답 처리: 모든 그룹이 충분히 샘플링되어 후보가 20개 이상이거나 모두 소진이면 종료한다.
-        // 아니면 소진되지 않은 다음 그룹으로 넘어가고 0.4초 쉰다.
+        // 30초가 지났고 필요한 만큼 모였어도 끝낸다. 아니면 소진되지 않은 다음 그룹으로 넘어가 0.4초 쉰다
+        // (실패 뒤에는 연속 실패 수만큼 1~6초).
         if (completed) {
-            releaseDelegate();
             completed = false;
+            pending = false;
+            versus::gdnet::release(this);
             auto& group = groups[groupIndex];
             if (group.ids.empty() && !group.likes && group.requests == 1 && group.total > 10 && !failed)
                 group.candidates.clear();
-            if (failed) group.requests = 3;
+            if (failed) {
+                ++group.failures;
+                ++failuresInRow;
+            } else
+                failuresInRow = 0;
             size_t count = 0;
             bool allSampled = true;
             for (auto const& item : groups) {
                 count += item.candidates.size();
                 allSampled &= item.requests >= 2 || item.exhausted();
             }
-            if ((allSampled && count >= 20) ||
+            if ((allSampled && count >= 20) || (count >= needed() && elapsed >= kSoftLimit) ||
                 std::all_of(groups.begin(), groups.end(), [](auto const& g) { return g.exhausted(); })) {
                 finish();
                 return;
@@ -300,20 +341,23 @@ public:
             do {
                 groupIndex = (groupIndex + 1) % groups.size();
             } while (groups[groupIndex].exhausted());
+            next = now + (failed ? backoff(failuresInRow) : std::chrono::milliseconds(400));
             failed = false;
-            next = now + std::chrono::milliseconds(400);
         }
-        // 요청 대기 중: 12초 넘게 응답이 없으면 실패로 처리한다.
+        // 요청 대기 중: 12초 넘게 응답이 없으면 실패로 처리한다(늦은 응답은 버린다).
         if (pending) {
             if (now - requested > std::chrono::seconds(12)) {
+                versus::gdnet::drop(key);
                 completed = true;
                 failed = true;
             }
             return;
         }
-        // 다른 곳이 GD 레벨 델리게이트를 쓰고 있으면 기다린다.
-        auto* manager = GameLevelManager::sharedState();
-        if (now < next || manager->m_levelManagerDelegate) return;
+        if (now < next) return;
+        if (found() >= needed() && elapsed >= kSoftLimit) {
+            finish();
+            return;
+        }
         auto& group = groups[groupIndex];
         // 요청할 페이지 선택: 첫 요청은 0페이지, 좋아요 조건 탐색 중이면 점차 뒤 페이지로,
         // 그 외에는 아직 안 쓴 페이지를 무작위로 고른다.
@@ -345,17 +389,30 @@ public:
             search->m_demonFilter = static_cast<GJDifficulty>(group.query.demonFilter);
         }
         key = search->getKey();
-        // 같은 키의 다운로드가 이미 진행 중이면 1초 뒤 다시 시도한다.
-        if (manager->isDLActive(key.c_str())) {
-            next = now + std::chrono::seconds(1);
-            return;
+        // GD가 같은 키를 이미 요청 중이면(다른 곳의 요청이나 응답이 오지 않은 지난 요청) 1초 뒤 다시 본다.
+        // 15초가 지나도 그대로면 응답이 오지 않는 요청으로 보고 GD의 목록에서 지운 뒤 보낸다.
+        if (versus::gdnet::active(key)) {
+            if (busyKey != key) {
+                busyKey = key;
+                busySince = now;
+            }
+            if (now - busySince < std::chrono::seconds(15)) {
+                next = now + std::chrono::seconds(1);
+                return;
+            }
+            log::warn("Versus map search: GD kept {} busy for 15 s; asking again", key);
+            versus::gdnet::forget(key);
         }
+        busyKey.clear();
         group.pages.insert(page);
         pending = true;
         requested = now;
         ++group.requests;
-        manager->m_levelManagerDelegate = this;
-        manager->getOnlineLevels(search);
+        if (!versus::gdnet::search(search, this)) {
+            pending = false;
+            --group.requests;
+            next = now + std::chrono::seconds(1);
+        }
     }
 };
 }
@@ -374,8 +431,8 @@ void findRandomMapsWithoutRoom(MapSelection filter, std::function<bool()> alive,
 }
 
 namespace {
-// 1.0.8: 레벨 하나를 ID로 찾는 싱글턴. GD 레벨 델리게이트는 하나뿐이라 다른 검색이 쓰는 동안은 기다리고,
-// 응답이 12초(전체 20초) 안에 없으면 실패로 끝낸다. 끝나면 델리게이트를 바로 돌려준다.
+// 1.0.8: 레벨 하나를 ID로 찾는 싱글턴. 응답은 GdRequests 라우터로 받고(델리게이트 자리를 기다리지 않음),
+// 응답이 12초(전체 20초) 안에 없으면 실패로 끝낸다.
 class LevelLookup final : public CCNode, public LevelManagerDelegate {
     using Clock = std::chrono::steady_clock;
     using Done = std::function<void(std::optional<LevelInfo>, std::string)>;
@@ -388,9 +445,9 @@ class LevelLookup final : public CCNode, public LevelManagerDelegate {
 
     bool owns(char const* key) const { return m_pending && key && m_key == key; }
     void finish(std::optional<LevelInfo> level, std::string error) {
-        auto* manager = GameLevelManager::sharedState();
-        if (manager->m_levelManagerDelegate == this) manager->m_levelManagerDelegate = nullptr;
+        if (m_pending) versus::gdnet::drop(m_key);
         m_pending = false;
+        versus::gdnet::release(this);
         m_search = nullptr;
         if (auto done = std::exchange(m_done, {})) done(std::move(level), std::move(error));
     }
@@ -436,15 +493,13 @@ public:
             finish(std::nullopt, "GD's servers did not answer. Try again.");
             return;
         }
-        auto* manager = GameLevelManager::sharedState();
-        if (m_pending || manager->m_levelManagerDelegate) return;
+        if (m_pending) return;
         m_search = GJSearchObject::create(SearchType::Search, gd::string(std::to_string(m_id)));
         m_key = m_search->getKey();
-        if (manager->isDLActive(m_key.c_str())) return;
+        if (versus::gdnet::active(m_key)) return;
         m_pending = true;
         m_asked = now;
-        manager->m_levelManagerDelegate = this;
-        manager->getOnlineLevels(m_search);
+        if (!versus::gdnet::search(m_search, this)) m_pending = false;
     }
 };
 }

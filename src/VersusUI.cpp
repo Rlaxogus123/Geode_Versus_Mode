@@ -7893,6 +7893,10 @@ class RankedLayer final : public SceneLayer {
     double m_displayRating = ranked::INITIAL_RATING;
     ranked::Phase m_phase = ranked::Phase::Idle;
     std::string m_candidateMatch;
+    // 1.0.8: 후보 검색이 실패한 매치와 그 횟수, 다음 검색을 시작해도 되는 시각(바로 다시 묻지 않게).
+    std::string m_candidateRetryMatch;
+    int m_candidateRetries = 0;
+    std::chrono::steady_clock::time_point m_candidateRetryAt;
     std::string m_assetMatch;
     std::string m_observedMatch;
     std::string m_shownDraw;
@@ -8675,6 +8679,7 @@ class RankedLayer final : public SceneLayer {
         if (m_introTime > 0.f || !match.candidateProvider || match.state != "map_search" ||
             m_candidateMatch == match.id)
             return;
+        if (m_candidateRetryMatch == match.id && std::chrono::steady_clock::now() < m_candidateRetryAt) return;
         m_candidateMatch = match.id;
         MapSelection filter{true, match.mapMask, false};
         auto excluded = match.failedMaps;
@@ -8689,6 +8694,8 @@ class RankedLayer final : public SceneLayer {
         extras.minLikes = match.minLikes;
         extras.maxSeconds = match.maxSeconds;
         extras.noTwoPlayer = match.noTwoPlayer;
+        // Season 2: 서버가 탐색 60초에 매치를 끝내므로 40초 안에 가진 후보로 끝낸다.
+        if (m_season2) extras.seconds = 40;
         findRandomMaps(filter, std::move(extras),
                        [self = Weak<RankedLayer>(this), id = match.id, failed = std::move(excluded),
                         needed](std::vector<LevelInfo> levels, std::string detail) mutable {
@@ -8702,6 +8709,14 @@ class RankedLayer final : public SceneLayer {
                                                                         : "Searching for a map...";
                            if (!detail.empty()) {
                                owner->m_candidateMatch.clear();
+                               // 1.0.8: 다시 검색하기 전에 2, 4, 6초 쉰다(GD 서버에 연달아 묻지 않게).
+                               if (owner->m_candidateRetryMatch != id) {
+                                   owner->m_candidateRetryMatch = id;
+                                   owner->m_candidateRetries = 0;
+                               }
+                               int const tries = ++owner->m_candidateRetries;
+                               owner->m_candidateRetryAt =
+                                   std::chrono::steady_clock::now() + std::chrono::seconds(std::min(6, 2 * tries));
                                owner->m_status->setString("MAP SEARCH RETRYING...");
                                owner->m_detail->setString(detail.c_str());
                                return;

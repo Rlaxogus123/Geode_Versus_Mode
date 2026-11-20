@@ -3,6 +3,7 @@
 // 내려받은 레벨은 최대 8개까지 메모리에 두고, 배틀용으로만 받은 레벨은 GD Saved 목록에서 빼 둔다.
 #include "MapCache.hpp"
 #include "BattleLevelData.hpp"
+#include "GdRequests.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GameLevelManager.hpp>
 #include <Geode/binding/GJGameLevel.hpp>
@@ -81,11 +82,14 @@ class Cache final : public CCNode, public LevelDownloadDelegate, public MusicDow
     std::map<int, Ref<GJGameLevel>> unsaveSoon;
     std::map<int, std::string> unsaved;
     std::set<int> keepSaved;
-    // 레벨 다운로드 시작 전에 GD Saved에 이미 있었는지.
-    bool pendingWasSaved = true;
+    // 레벨 다운로드를 보내기 전에 그 레벨이 GD Saved에 이미 있었는지(레벨 ID별: 늦게 온 응답도 정리한다).
+    std::map<int, bool> wasSaved;
     uint64_t useCounter = 0;
+    // 지금 작업의 레벨 요청(pendingKey는 GD의 다운로드 키, pendingSince는 보낸 시각).
     bool pending = false;
     int pendingID = 0;
+    std::string pendingKey;
+    Clock::time_point pendingSince;
     // generation은 작업 번호, requestGeneration은 진행 중 레벨 요청이 속한 작업 번호(취소 감지용).
     uint64_t generation = 0, requestGeneration = 0;
     bool watchingMusic = false, askedURL = false;
@@ -106,7 +110,11 @@ public:
     void cancel(int64_t id) {
         if (skippedLevel == id) skippedLevel = 0;
         std::erase_if(queue, [id](auto const& job) { return job.id == id; });
-        if (current && current->id == id) finish(false, "Map selection changed.");
+        if (current && current->id == id) {
+            // 1.0.8: 미리 받기만 하던 맵이면 받고 있던 노래 / 효과음도 멈춰 다음 맵의 다운로드와 다투지 않게 한다.
+            if (prefetchOnly()) stopQueuedAudio();
+            finish(false, "Map selection changed.");
+        }
     }
     // 선택 범위는 방/레벨/추첨에 묶고, 장면 전환 중에는 유지한다.
     bool audioSkipped(int64_t id) {
@@ -127,14 +135,9 @@ public:
         skippedLevel = id;
         if (current && current->id == id) {
             auto* music = MusicDownloadManager::sharedState();
-            // GD의 stopDownload와 같은 방식으로 이 작업이 요청한 오디오만 취소한다.
-            auto stop = [music](char const* key) {
-                if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(music->getDLObject(key)))
-                    request->setShouldCancel(true);
-                music->removeDLFromActive(key);
-            };
-            for (int song : requestedSongs) stop(music->getSongDownloadKey(song));
-            for (int sound : requestedSounds) stop(music->getSFXDownloadKey(sound));
+            // 이 작업이 요청한 오디오만 취소한다.
+            for (int song : requestedSongs) stopRequest(music, music->getSongDownloadKey(song));
+            for (int sound : requestedSounds) stopRequest(music, music->getSFXDownloadKey(sound));
             requestedSongs.clear();
             requestedSounds.clear();
             // 노래 정보 요청은 메타데이터만 받으므로 완료되어도 오디오를 시작하지 않는다.
@@ -298,6 +301,29 @@ public:
         return current && std::all_of(current->callbacks.begin(), current->callbacks.end(),
                                       [](Caller const& caller) { return caller.prefetch; });
     }
+    // GD의 stopDownload와 같은 방식으로 오디오 요청 하나를 취소한다.
+    static void stopRequest(MusicDownloadManager* music, char const* key) {
+        if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(music->getDLObject(key)))
+            request->setShouldCancel(true);
+        music->removeDLFromActive(key);
+    }
+    // 지금 작업이 요청한 오디오 중 대기열의 다른 맵이 쓰지 않는 것을 멈춘다.
+    void stopQueuedAudio() {
+        std::set<int> keepSongs, keepSounds;
+        for (auto const& job : queue)
+            if (auto* next = level(job.id)) {
+                auto const& [audio, effects] = assetsFor(next);
+                keepSongs.insert(audio.begin(), audio.end());
+                keepSounds.insert(effects.begin(), effects.end());
+            }
+        auto* music = MusicDownloadManager::sharedState();
+        for (int song : requestedSongs)
+            if (!keepSongs.contains(song) && !music->isSongDownloaded(song))
+                stopRequest(music, music->getSongDownloadKey(song));
+        for (int sound : requestedSounds)
+            if (!keepSounds.contains(sound) && !music->isSFXDownloaded(sound))
+                stopRequest(music, music->getSFXDownloadKey(sound));
+    }
     // 맵 준비를 요청한다. Platformer면 거부하고, 이미 준비돼 있으면 바로 완료,
     // 같은 맵이 진행 중이거나 대기 중이면 호출자를 합치고, 아니면 대기열에 넣는다.
     void add(int id, versus::Done callback, AudioNeed need, bool prefetch) {
@@ -381,30 +407,28 @@ public:
         for (auto& caller : callbacks)
             if (caller.done) caller.done(success, detail);
     }
-    // 레벨 다운로드 델리게이트를 해제한다.
-    void releaseDelegate() {
-        pending = false;
-        auto* manager = GameLevelManager::sharedState();
-        if (manager->m_levelDownloadDelegate == this) manager->m_levelDownloadDelegate = nullptr;
-    }
-    // 레벨 다운로드 완료. 데이터가 없거나 Platformer이면 재시도 또는 실패 처리한다.
-    // 배틀용으로만 받은 레벨은 GD Saved에서 뺄 예약을 건다.
+    // 레벨 다운로드 완료. 1.0.8: 응답은 GdRequests 라우터로 Versus가 보낸 요청의 것만 오며, 지금 작업의 요청이
+    // 아니면(취소된 미리 받기 등) 받은 레벨을 캐시에만 넣는다. 배틀용으로만 받은 레벨은 GD Saved에서 뺄 예약을 건다.
+    // 지금 작업의 레벨인데 데이터가 없거나 Platformer이면 재시도 또는 실패 처리한다.
     void levelDownloadFinished(GJGameLevel* value) override {
-        if (!pending) return;
-        bool valid = current && current->id == pendingID && generation == requestGeneration;
-        if (!value) {
-            releaseDelegate();
-            if (valid) retryLevel("The selected map returned no data.");
-            return;
-        }
-        if (value->m_levelID.value() != pendingID) return;
-        releaseDelegate();
-        if (!value->m_levelString.empty()) {
+        int const id = value && value->m_levelID.value() > 0 ? value->m_levelID.value()
+                                                             : versus::gdnet::levelOfKey(versus::gdnet::deliveringKey());
+        if (value && value->m_levelID.value() == id && !value->m_levelString.empty()) {
             remember(value);
-            if (!pendingWasSaved) dropSoon(pendingID, value);
-            if (valid && platformer(value)) failure = versus::kPlatformerMapMessage;
-        } else if (valid)
+            if (auto saved = wasSaved.find(id); saved != wasSaved.end()) {
+                if (!saved->second) dropSoon(id, value);
+                wasSaved.erase(saved);
+            }
+        }
+        if (!pending || id != pendingID) return;
+        pending = false;
+        if (!current || current->id != pendingID || generation != requestGeneration) return;
+        if (!value)
+            retryLevel("The selected map returned no data.");
+        else if (value->m_levelString.empty())
             retryLevel("The selected map contains no level data.");
+        else if (platformer(value))
+            failure = versus::kPlatformerMapMessage;
     }
     // 레벨 다운로드 재시도 예약. 최대 3회, 대기 시간은 2초 x 시도 횟수.
     void retryLevel(std::string const& detail) {
@@ -414,11 +438,15 @@ public:
         else
             levelRetryAt = Clock::now() + std::chrono::seconds(2 * levelAttempts);
     }
-    void levelDownloadFailed(int id) override {
-        if (!pending || (id != 0 && id != pendingID)) return;
-        bool valid = current && current->id == pendingID && generation == requestGeneration;
-        releaseDelegate();
-        if (valid) retryLevel(fmt::format("Map {} could not be downloaded from the level server.", pendingID));
+    // GD가 넘기는 값은 레벨 ID가 아니라 서버 응답 코드(-1 등)다. 1.0.8 전에는 이것을 레벨 ID로 걸러 실패를 버렸고,
+    // 그러면 다시 받지 않고 120초(서버는 60초) 동안 "Map ..."에 멈춰 있었다. 이제 라우터가 알려 주는 키로 맵을 찾는다.
+    void levelDownloadFailed(int response) override {
+        int const id = versus::gdnet::levelOfKey(versus::gdnet::deliveringKey());
+        wasSaved.erase(id);
+        if (!pending || id != pendingID) return;
+        pending = false;
+        if (current && current->id == pendingID && generation == requestGeneration)
+            retryLevel(fmt::format("Map {} could not be downloaded from the level server ({}).", pendingID, response));
     }
     // 오디오 다운로드/정보 실패 처리. 사용할 수 없는 오디오(오류 2)이거나 3회 실패하면
     // Ranked는 건너뛰고, 그 외에는 작업 실패로 한다. 아니면 2초 x 시도 횟수 후 재시도.
@@ -510,11 +538,10 @@ public:
         timer -= dt;
         if (timer > 0.f) return;
         timer = .2f;
-        // 취소된 요청이 남긴 델리게이트를 정리한다.
-        if (pending && (!current || generation != requestGeneration)) {
-            auto* manager = GameLevelManager::sharedState();
-            if (!manager->isDLActive(manager->getLevelDownloadKey(pendingID, false, 0))) releaseDelegate();
-        }
+        // 작업이 바뀌었으면 그 작업의 레벨 요청은 더 기다리지 않는다(늦게 온 응답은 캐시에만 들어간다).
+        // 기다리는 요청이 없으면 요청하며 쥐었던 GD의 다운로드 델리게이트 자리를 비운다.
+        if (pending && (!current || generation != requestGeneration)) pending = false;
+        if (!pending) versus::gdnet::release(this);
         // 다음 작업 시작: 상태를 초기화한다.
         if (!current) {
             if (queue.empty()) return;
@@ -539,19 +566,45 @@ public:
             return;
         }
         auto* value = level(current->id);
-        // 레벨 데이터가 없으면 다운로드를 요청한다(다른 다운로드가 진행 중이면 기다림).
-        if (!value) {
-            auto* manager = GameLevelManager::sharedState();
-            if (Clock::now() < levelRetryAt || pending || manager->m_levelDownloadDelegate ||
-                manager->isDLActive(manager->getLevelDownloadKey(current->id, false, 0)))
+        // 응답 콜백 없이 레벨이 생겼으면(GD가 받은 레벨을 저장해 두었다) 그 요청은 받은 것으로 친다.
+        if (value && pending && pendingID == current->id) {
+            pending = false;
+            if (auto saved = wasSaved.find(pendingID); saved != wasSaved.end()) {
+                if (!saved->second) dropSoon(pendingID, value);
+                wasSaved.erase(saved);
+            }
+            if (platformer(value)) {
+                finish(false, versus::kPlatformerMapMessage);
                 return;
+            }
+        }
+        // 레벨 데이터가 없으면 다운로드를 요청한다. 1.0.8: GD의 다운로드 델리게이트 자리가 비기를 기다리지 않는다
+        // (응답은 라우터로 온다). GD가 이 레벨을 이미 받는 중이면(다른 곳의 요청 포함) 그 응답을 기다린다 - 받은
+        // 레벨은 GD가 저장해 두므로 위의 level()이 찾는다. 응답 없이 요청이 끝났거나 45초가 지나도 답이 없으면
+        // 그 요청을 버리고 다시 보낸다(최대 3번).
+        if (!value) {
+            auto const now = Clock::now();
+            if (pending) {
+                bool const inFlight = versus::gdnet::active(pendingKey);
+                if (now - pendingSince < (inFlight ? std::chrono::seconds(45) : std::chrono::seconds(2))) return;
+                pending = false;
+                if (inFlight) versus::gdnet::forget(pendingKey);
+                retryLevel(inFlight ? "GD's level server did not answer." : "The download ended without the map.");
+                return;
+            }
+            if (now < levelRetryAt) return;
+            auto* manager = GameLevelManager::sharedState();
             pending = true;
             pendingID = current->id;
+            pendingKey = versus::gdnet::downloadKey(pendingID);
+            pendingSince = now;
             requestGeneration = generation;
             ++levelAttempts;
-            pendingWasSaved = manager->getSavedLevel(pendingID) != nullptr;
-            manager->m_levelDownloadDelegate = this;
-            manager->downloadLevel(pendingID, false, 0);
+            // GD Saved에 있었는지는 새로 보내는 요청에서만 다시 본다(이미 받는 중인 요청에 기대면 처음 값을 둔다).
+            if (!versus::gdnet::active(pendingKey) || !wasSaved.contains(pendingID))
+                wasSaved[pendingID] = manager->getSavedLevel(pendingID) != nullptr;
+            if (!versus::gdnet::download(pendingID, this))
+                log::info("Versus map {}: GD is already downloading it; waiting for that answer", pendingID);
             return;
         }
         // 건너뛰기는 레벨 다운로드/검증 후에만 완료하며, 추가 오디오 요청을 만들지 않는다.

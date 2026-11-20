@@ -6,7 +6,7 @@ namespace versus {
 // 결과 콜백: 후보 레벨 목록과 오류 메시지(성공이면 빈 문자열).
 using RandomMapsCallback = std::function<void(std::vector<LevelInfo>, std::string)>;
 // MapSelection 외에 추가로 거는 조건. 길이/피처 상태/지정 ID 목록, 최소 후보 수,
-// 최소 좋아요, 최대 플레이 시간(초), 2인 모드 제외/한정.
+// 최소 좋아요, 최대 플레이 시간(초), 2인 모드 제외/한정, 검색 제한 시간(초, 0이면 90초).
 struct RandomMapExtras {
     std::vector<int> lengths;
     std::vector<int> features;
@@ -16,6 +16,7 @@ struct RandomMapExtras {
     int maxSeconds = 0;
     bool noTwoPlayer = false;
     bool onlyTwoPlayer = false;
+    int seconds = 0;
     bool operator==(RandomMapExtras const&) const = default;
 };
 // 방의 필터에 맞는 랜덤 맵 후보를 찾는다.
