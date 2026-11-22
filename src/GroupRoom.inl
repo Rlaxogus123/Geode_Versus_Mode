@@ -19,16 +19,17 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
     bool m_autoLives = false;
     CCMenuItemToggler* m_auto = nullptr;
     CCLabelBMFont* m_autoLabel = nullptr;
-    CCLabelBMFont* m_autoHint = nullptr;
     CCLabelBMFont* m_speedLabel = nullptr;
     CCMenuItemSpriteExtra* m_modeButton = nullptr;
     CCMenuItemSpriteExtra* m_practiceButton = nullptr;
-    CCMenuItemSpriteExtra* m_timeButton = nullptr;
+    CCMenuItemToggler* m_timeCheck = nullptr;  // "% Time" 체크박스: 켜면 Map %, 끄면 고정 시간
+    CCLabelBMFont* m_timeCheckLabel = nullptr;
     CCNode* m_beta = nullptr;
     NineSlice* m_modePanel = nullptr;  // 모드 판(1:1 규칙 창처럼 모드마다 색)
     // 창 크기와 줄 높이. 높이 284 = 화면 높이 320에서 위아래 18(닫기 버튼 자리)을 뺀 것.
     static constexpr float kW = 300.f, kH = 284.f;
     static constexpr float kModeY = 236.f, kValueY = 190.f, kAutoHintY = 170.f, kRulesHintY = 156.f;
+    static constexpr float kCheckX = 128.f;  // 값 아래 줄 체크박스(AUTO / % Time) 자리
     static constexpr float kMaxY = 108.f, kSpeedY = 58.f, kApplyY = 22.f;
     CCLabelBMFont* m_valueCaption = nullptr;
     CCLabelBMFont* m_unlimited = nullptr;
@@ -78,7 +79,7 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         enabled(m_apply, !m_pending);
         enabled(m_modeButton, !m_pending);
         enabled(m_practiceButton, !m_pending);
-        enabled(m_timeButton, !m_pending);
+        m_timeCheck->setEnabled(!m_pending);
         m_livesInput->setEnabled(!m_pending && !autoOn && !unlimited());
         m_livesInput->getBGSprite()->setOpacity(autoOn ? 105 : 230);
         m_maxInput->setEnabled(!m_pending);
@@ -93,22 +94,23 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         placeBetaSticker(m_modeButton, m_beta, timed, .85f);
         caption(m_practiceButton, m_practice ? "Practice: ON" : "Practice: OFF",
                 m_practice ? "GJ_button_01.png" : "GJ_button_04.png", 108.f);
-        // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 그 자리에 시간 방식 버튼을 둔다.
-        caption(m_timeButton, m_timeType == 0 ? "Time: Fixed" : "Time: Map %", "GJ_button_01.png", 108.f);
+        // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유). 시간 방식은 값 아래 줄의 "% Time" 체크박스.
         m_practiceButton->setVisible(!timed);
-        m_timeButton->setVisible(timed);
+        m_timeCheck->setVisible(timed);
+        m_timeCheckLabel->setVisible(timed);
         m_valueCaption->setString(m_mode == 1   ? "TARGET % (1-100)"
                                   : !timed      ? "LIVES"
-                                  : clockValue() ? "TIME (0:10-99:59)"
-                                                 : "MAP LENGTH % (1-9999)");
+                                  : clockValue() ? "TIME"
+                                                 : "MAP LENGTH %");
         if (m_autoLives && lives())
             if (auto const value = autoLives(m_level, m_random)) m_attempts = value->lives;
-        m_livesInput->setFilter(clockValue() ? "0123456789:" : "0123456789");
-        m_livesInput->setMaxCharCount(clockValue() ? 5 : timed ? 4 : 3);
-        m_livesInput->setString(clockValue() ? timeValueText(m_timeSeconds)
-                                             : std::to_string(m_mode == 1 ? m_target
-                                                              : timed     ? m_timePercent
-                                                                          : m_attempts));
+        // 퍼센트 값(목표 %, 맵 길이 %)은 "40%"처럼 %까지 보인다.
+        bool const percentValue = m_mode == 1 || (timed && !clockValue());
+        m_livesInput->setFilter(clockValue() ? "0123456789:" : percentValue ? "0123456789%" : "0123456789");
+        m_livesInput->setMaxCharCount(clockValue() ? 5 : timed ? 5 : percentValue ? 4 : 3);
+        m_livesInput->setString(clockValue()   ? timeValueText(m_timeSeconds)
+                                : percentValue ? std::to_string(timed ? m_timePercent : m_target) + "%"
+                                               : std::to_string(m_attempts));
         m_livesInput->setVisible(!unlimited());
         // 값 줄의 큰 증감 버튼: 생명/목표 5, 시간 1분, 맵 비율 50%.
         for (auto* item : m_steps) {
@@ -127,13 +129,6 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_speedLabel->setColor(m_speed == 100 ? ccWHITE : ccc3(255, 120, 200));
         for (CCNode* node : {static_cast<CCNode*>(m_auto), static_cast<CCNode*>(m_autoLabel)})
             node->setVisible(lives());
-        // 자동 생명 안내 자리: 시간제는 시간이 끝난 뒤의 규칙이나 이 맵에서의 시간을 알려 준다.
-        m_autoHint->setVisible(lives() || timed);
-        m_autoHint->setString(!timed          ? autoLivesLine(m_autoLives, m_level, m_random, "lives").c_str()
-                              : clockValue()  ? "When the time is up, everyone gets one last attempt"
-                                              : timeLengthLine(timeRules(), m_level, m_random).c_str());
-        m_autoHint->limitLabelWidth(260.f, .3f, .1f);
-        m_autoHint->setColor(timed ? kTimeHint : m_autoLives ? ccc3(150, 255, 175) : kMuted);
         m_rulesHint->setString(timed        ? "BETA: best % within the time wins. The first clear takes 1st."
                                : m_mode == 1 ? "The first to reach the target % wins."
                                : m_practice  ? "Practice, no attempt limit: the fewest failed runs to a clear wins."
@@ -193,11 +188,11 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         showValues();
         refresh();
     }
-    // 시간제의 시간 방식 전환 (Fixed: 정한 시간 / Map %: 맵 길이의 비율).
+    // 시간제의 시간 방식 전환 ("% Time" 체크: 켜면 Map % = 맵 길이의 비율, 끄면 Fixed = 정한 시간).
     void onTimeType(CCObject*) {
         if (m_pending || m_mode != 2) return;
         keepTyped();
-        m_timeType = 1 - m_timeType;
+        m_timeType = m_timeCheck->isToggled() ? 0 : 1;  // (누른 뒤에 체크 상태가 바뀐다)
         showValues();
         refresh();
     }
@@ -290,8 +285,8 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_modePanel->setPosition({kW / 2.f, 199.f});
         m_mainLayer->addChild(m_modePanel);
         auto* settingsPanel = NineSlice::create("square02b_001.png");
-        settingsPanel->setContentSize({272.f, 96.f});
-        settingsPanel->setPosition({kW / 2.f, 96.f});
+        settingsPanel->setContentSize({272.f, 107.f});
+        settingsPanel->setPosition({kW / 2.f, 90.5f});
         settingsPanel->setColor(ccc3(0, 0, 0));
         settingsPanel->setOpacity(110);
         m_mainLayer->addChild(settingsPanel);
@@ -318,9 +313,6 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_practiceButton = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onPractice), "Practice: OFF",
                                   {224.f, kModeY}, .42f);
         m_practiceButton->setID("group-rules-practice"_spr);
-        m_timeButton = button(m_buttonMenu, this, menu_selector(GroupRulesPopup::onTimeType), "Time: Fixed",
-                              {224.f, kModeY}, .42f);
-        m_timeButton->setID("group-rules-time-type"_spr);
         auto row = [this](char const* caption, float y, int base, TextInput*& value, int initial, size_t digits,
                           std::function<void(int)> typed) {
             auto* title = label(m_mainLayer, caption, {150.f, y + 24.f}, .34f, 220.f, kIce);
@@ -360,11 +352,17 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         m_maxInput->setID("group-max-players-input"_spr);
         m_auto = CCMenuItemToggler::createWithStandardSprites(this, menu_selector(GroupRulesPopup::onAuto), .42f);
         m_auto->setID("group-auto-lives"_spr);
-        m_auto->setPosition({194.f, kValueY + 24.f});
+        // 값 아래 줄(가운데): 목숨제는 AUTO 체크박스, 시간제는 "% Time" 체크박스(켜면 Map %, 끄면 고정 시간).
+        m_auto->setPosition({kCheckX, kAutoHintY});
         m_auto->toggle(m_autoLives);
         m_buttonMenu->addChild(m_auto);
-        m_autoLabel = label(m_mainLayer, "AUTO", {205.f, kValueY + 24.f}, .3f, 40.f, kIce, true);
-        m_autoHint = label(m_mainLayer, "", {150.f, kAutoHintY}, .3f, 260.f, kMuted, false, "chatFont.fnt");
+        m_autoLabel = label(m_mainLayer, "AUTO", {kCheckX + 11.f, kAutoHintY}, .34f, 60.f, kIce, true);
+        m_timeCheck = CCMenuItemToggler::createWithStandardSprites(this, menu_selector(GroupRulesPopup::onTimeType), .42f);
+        m_timeCheck->setID("group-rules-time-type"_spr);
+        m_timeCheck->setPosition({kCheckX, kAutoHintY});
+        m_timeCheck->toggle(m_timeType == 1);
+        m_buttonMenu->addChild(m_timeCheck);
+        m_timeCheckLabel = label(m_mainLayer, "% Time", {kCheckX + 11.f, kAutoHintY}, .34f, 70.f, kIce, true);
         label(m_mainLayer, "SPEED (0.5x-3x)", {150.f, kSpeedY + 24.f}, .34f, 220.f, kIce);
         m_speedLabel = label(m_mainLayer, speedText(m_speed), {150.f, kSpeedY}, .5f, 70.f);
         m_speedLabel->setID("group-speed-value"_spr);

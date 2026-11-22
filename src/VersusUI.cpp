@@ -536,6 +536,11 @@ void styleInput(TextInput* input) {
     input->getBGSprite()->setOpacity(230);
 }
 
+// 퍼센트 값 입력칸은 "40%"처럼 % 기호까지 보여 준다. 읽을 때는 끝의 %를 뗀다.
+std::string withoutPercent(std::string text) {
+    while (!text.empty() && (text.back() == '%' || text.back() == ' ')) text.pop_back();
+    return text;
+}
 // 숫자(Uint)만 받는 작은 TextInput. 입력 문자열을 정수로 파싱해 typed 콜백에 넘기며,
 // 비었거나 숫자가 아니면 -1을 넘긴다.
 TextInput* numberInput(CCNode* parent, CCPoint at, int value, size_t digits, float width,
@@ -547,7 +552,8 @@ TextInput* numberInput(CCNode* parent, CCPoint at, int value, size_t digits, flo
     input->setPosition(at);
     input->setString(std::to_string(value).c_str());
     styleInput(input);
-    input->setCallback([typed = std::move(typed)](std::string const& text) {
+    input->setCallback([typed = std::move(typed)](std::string const& raw) {
+        auto const text = withoutPercent(raw);
         int parsed = -1;
         if (!text.empty()) {
             auto const [end, problem] = std::from_chars(text.data(), text.data() + text.size(), parsed);
@@ -560,7 +566,7 @@ TextInput* numberInput(CCNode* parent, CCPoint at, int value, size_t digits, flo
 }
 // numberInput과 같은 규칙으로 현재 입력값을 정수로 읽는다 (잘못된 값이면 -1).
 int typedNumber(TextInput* input) {
-    std::string const text = input->getString();
+    std::string const text = withoutPercent(input->getString());
     int value = -1;
     if (!text.empty()) {
         auto const [end, problem] = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -3443,13 +3449,12 @@ std::string autoLivesLine(bool on, LevelInfo const& level, bool random, char con
 char const* modeCaption(int mode) {
     return mode == 2 ? "Mode: Time 3/3" : mode == 1 ? "Mode: Percent 2/3" : "Mode: Attempts 1/3";
 }
-// 규칙 창의 모드 판 색(1:1·그룹 공통): Attempts 회청, Percent 초록, Time 노랑(파란 창 위에서도 노랗게 보이도록 더
-// 진하게; 그 위의 안내 글자는 kTimeHint).
+// 규칙 창의 모드 판 색(1:1·그룹 공통): Attempts 회청, Percent 초록, Time 파스텔 하늘색(그 위의 안내 글자는 kTimeHint).
 ccColor3B modePanelColor(int mode) {
-    return mode == 2 ? ccc3(255, 230, 60) : mode == 1 ? ccc3(150, 255, 165) : ccc3(205, 210, 220);
+    return mode == 2 ? ccc3(170, 225, 255) : mode == 1 ? ccc3(150, 255, 165) : ccc3(205, 210, 220);
 }
 GLubyte modePanelOpacity(int mode) {
-    return mode == 2 ? 160 : mode == 1 ? 110 : 95;
+    return mode == 2 ? 140 : mode == 1 ? 110 : 95;
 }
 // 노란 시간제 판 위의 안내 글자(chatFont) 색.
 constexpr ccColor3B kTimeHint = {25, 35, 80};
@@ -3484,21 +3489,6 @@ void placeBetaSticker(CCMenuItemSpriteExtra* item, CCNode* sticker, bool shown, 
     auto const size = item->getContentSize();
     sticker->setPosition({size.width + 4.f + 16.f * scale, size.height / 2.f});
 }
-// 시간제 안내 문구. 고정 시간은 승리 조건을, 맵 비율은 이 맵에서 몇 분이 되는지를 알려 준다.
-std::string timeLengthLine(GameRules const& rules, LevelInfo const& level, bool random) {
-    if (rules.timeType == 0) return "Best % within the time wins - a clear wins at once";
-    if (random) return fmt::format("{}% of the length of the map rolled at the start", rules.timePercent);
-    if (level.id <= 0) return fmt::format("{}% of the map's length, once chosen", rules.timePercent);
-    double const seconds = mapPlaySeconds(level.id);
-    if (!(seconds > 0.))
-        return fmt::format("{}% of the map's length ({} if it is unknown)", rules.timePercent,
-                           timeValueText(kTimeDefaultSeconds));
-    auto const limit = timeLimitMs(rules, seconds);
-    return fmt::format("On this map: {} ({}% of {}{})", timeValueText(static_cast<int>(limit / 1000)),
-                       rules.timePercent, timeValueText(static_cast<int>(seconds)),
-                       rules.speed != 100 ? " at " + speedText(rules.speed) : std::string());
-}
-
 // 규칙 팝업의 Auto 안내 문구 위치/크기 상수.
 constexpr float kRulesAutoX = 97.f, kRulesAutoY = 140.f;
 constexpr float kRulesAutoTextX = 108.f, kRulesAutoTextWidth = 130.f, kRulesAutoTextHeight = 17.f;
@@ -3574,9 +3564,9 @@ class GameRulesPopup : public ::versus::DeferredPopup {
     NineSlice* m_rulesPanel = nullptr;
     // 1.0.8 시간제(Time, 베타): 시간 방식(Fixed / Map %) 버튼(시간제에서는 연습 버튼 자리), 모드 버튼의 BETA 딱지,
     // 시간 안내 문구, 시간제로 바꾸기 전의 연습 규칙(시간제에는 연습 규칙이 없어 끄고, 다른 모드로 가면 되살린다).
-    CCMenuItemSpriteExtra* m_timeType = nullptr;
+    CCMenuItemToggler* m_timeType = nullptr;  // "% Time" 체크박스: 켜면 Map %, 끄면 고정 시간
+    CCLabelBMFont* m_timeTypeLabel = nullptr;
     CCNode* m_beta = nullptr;
-    CCLabelBMFont* m_timeHint = nullptr;
     bool m_savedPractice = false;
     // Auto 목숨 계산에 쓰는 방의 레벨 정보와 랜덤 맵 여부, 플랫포머 맵 여부(Percent·Time 모드 불가).
     LevelInfo m_level;
@@ -3641,11 +3631,13 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         m_practice =
             button(m_buttonMenu, this, menu_selector(GameRulesPopup::onPractice), "Practice: OFF", {98.f, 109.f}, .5f);
         m_hacks = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onHacks), "Hacks: OFF", {232.f, 109.f}, .5f);
-        m_timeType =
-            button(m_buttonMenu, this, menu_selector(GameRulesPopup::onTimeType), "Time: Fixed", {98.f, 109.f}, .5f);
+        // 시간제의 시간 방식: 값 아래 줄의 "% Time" 체크박스(켜면 맵 길이 %, 끄면 고정 시간).
+        m_timeType = CCMenuItemToggler::createWithStandardSprites(this, menu_selector(GameRulesPopup::onTimeType), .45f);
         m_timeType->setID("rules-time-type"_spr);
-        m_timeHint = label(m_mainLayer, "", {165.f, 139.f}, .5f, 270.f, kTimeHint, false, "chatFont.fnt");
-        m_timeHint->setID("rules-time-hint"_spr);
+        m_timeType->setPosition({138.f, 139.f});
+        m_timeType->toggle(m_rules.timeType == 1);
+        m_buttonMenu->addChild(m_timeType);
+        m_timeTypeLabel = label(m_mainLayer, "% Time", {150.f, 139.f}, .42f, 90.f, kIce, true);
         m_speedLabel = label(m_mainLayer, "Speed: 1x", {165.f, 80.f}, .5f, 120.f, kIce);
         m_speedLess = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onSpeedLess), "-", {95.f, 80.f}, .46f);
         m_speedMore = button(m_buttonMenu, this, menu_selector(GameRulesPopup::onSpeedMore), "+", {235.f, 80.f}, .46f);
@@ -3659,7 +3651,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
     // 입력창 값을 현재 모드의 값(시도 횟수 1~99, 목표 퍼센트 1~100, 시간제의 시간 0:10~99:59 또는 맵 길이 비율
     // 1~9999%)으로 읽어 m_rules에 반영한다. 범위를 벗어나면 false (showError면 안내도 띄움).
     bool readValue(bool showError = false) {
-        auto const text = std::string(m_value->getString());
+        auto const text = withoutPercent(std::string(m_value->getString()));
         if (m_rules.mode == 2 && m_rules.timeType == 0) {
             int const seconds = parseTimeText(text);
             if (seconds < kTimeMinSeconds || seconds > kTimeMaxSeconds) {
@@ -3699,30 +3691,26 @@ class GameRulesPopup : public ::versus::DeferredPopup {
         m_valueTitle->setString(unlimited                  ? "No attempt limit"
                                 : m_rules.mode == 0        ? "Attempt limit (1-99)"
                                 : m_rules.mode == 1        ? "Target percent (1-100)"
-                                : m_rules.timeType == 0    ? "Time limit (0:10-99:59)"
-                                                           : "Percent of the map's length (1-9999)");
-        // 시간제의 고정 시간은 m:ss로 친다(초만 쳐도 된다). 나머지는 숫자만.
+                                : m_rules.timeType == 0    ? "Time limit"
+                                                           : "Percent of the map's length");
+        // 시간제의 고정 시간은 m:ss로 친다(초만 쳐도 된다). 퍼센트 값은 "40%"처럼 %까지 보인다.
         bool const clockValue = timed && m_rules.timeType == 0;
-        m_value->setFilter(clockValue ? "0123456789:" : "0123456789");
-        m_value->setMaxCharCount(clockValue ? 5 : timed ? 4 : 3);
-        m_value->setString(clockValue ? timeValueText(m_rules.timeSeconds)
-                                      : std::to_string(m_rules.mode == 0   ? m_rules.attempts
-                                                       : m_rules.mode == 1 ? m_rules.targetPercent
-                                                                           : m_rules.timePercent));
+        bool const percentValue = m_rules.mode == 1 || (timed && m_rules.timeType == 1);
+        m_value->setFilter(clockValue ? "0123456789:" : percentValue ? "0123456789%" : "0123456789");
+        m_value->setMaxCharCount(clockValue ? 5 : timed ? 5 : percentValue ? 4 : 3);
+        m_value->setString(clockValue     ? timeValueText(m_rules.timeSeconds)
+                           : percentValue ? std::to_string(timed ? m_rules.timePercent : m_rules.targetPercent) + "%"
+                                          : std::to_string(m_rules.attempts));
         m_value->setVisible(!unlimited);
         m_unlimited->setVisible(unlimited);
         caption(m_practice, m_rules.practice ? "Practice: ON" : "Practice: OFF", .5f,
                 m_rules.practice ? "GJ_button_01.png" : "GJ_button_04.png");
-        // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 그 자리에 시간 방식 버튼을 둔다.
+        // 시간제에는 연습 규칙이 없다(연습은 시간 안에 자유): 연습 버튼을 숨기고 Hacks 버튼을 가운데로.
         m_practice->setVisible(!timed);
+        m_hacks->setPositionX(timed ? 165.f : 232.f);
         m_timeType->setVisible(timed);
-        caption(m_timeType, m_rules.timeType == 0 ? "Time: Fixed" : "Time: Map %", .5f, "GJ_button_01.png");
-        enabled(m_timeType, !m_pending && !m_readOnly);
-        m_timeHint->setVisible(timed);
-        if (timed) {
-            m_timeHint->setString(timeLengthLine(m_rules, m_level, m_random).c_str());
-            m_timeHint->limitLabelWidth(270.f, .5f, .1f);
-        }
+        m_timeTypeLabel->setVisible(timed);
+        m_timeType->setEnabled(!m_pending && !m_readOnly);
         caption(m_hacks, m_rules.allowHacks ? "Hacks: ON" : "Hacks: OFF", .5f,
                 m_rules.allowHacks ? "GJ_button_02.png" : "GJ_button_04.png");
         enabled(m_hacks, !m_pending && !m_readOnly);
@@ -3752,7 +3740,6 @@ class GameRulesPopup : public ::versus::DeferredPopup {
             m_mode->setOpacity(255);
             m_practice->setOpacity(255);
             m_hacks->setOpacity(255);
-            m_timeType->setOpacity(255);
             m_less->setVisible(false);
             m_more->setVisible(false);
             m_value->getBGSprite()->setOpacity(190);
