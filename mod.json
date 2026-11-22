@@ -10,7 +10,7 @@
   "name": "Versus",
   "version": "v1.0.8",
   "developer": "Tipp7",
-  "description": "Create Classic 1 vs 1 or Group (up to 30 players) Versus rooms with custom rules, ready up, and compete on the same level.",
+  "description": "Create Classic 1 vs 1 or Group (up to 30 players) Versus rooms with custom rules, ready up, and compete on the same level!",
   "dependencies": {
     "geode.node-ids": ">=v1.22.0",
     "eclipse.eclipse-menu": {
