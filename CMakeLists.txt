@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(Versus VERSION 1.0.8 LANGUAGES C CXX)
+project(Versus VERSION 1.1.0 LANGUAGES C CXX)
 
 # Windows 로컬 빌드는 성공하면 현재 Geode 프로필에 바로 설치한다.
 if(WIN32)
@@ -60,21 +60,35 @@ message(STATUS "Found Geode: ${GEODE_SDK_PATH}")
 
 add_subdirectory("${GEODE_SDK_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/geode")
 setup_geode_mod(${PROJECT_NAME})
-# Argon(GD 계정 인증 라이브러리, MIT, github.com/GlobedGD/argon) 연동.
-# -DVERSUS_ARGON=OFF 로 끄고 빌드할 수 있다.
-option(VERSUS_ARGON "Link Argon for the account verification test" ON)
-if(VERSUS_ARGON)
-    # 오프라인으로 구성된 빌드 폴더에서도 Argon만은 한 번 내려받도록 허용한다.
-    set(FETCHCONTENT_FULLY_DISCONNECTED OFF)
-    CPMAddPackage("gh:GlobedGD/argon@1.5.1")
-    unset(FETCHCONTENT_FULLY_DISCONNECTED)
-endif()
-if(VERSUS_ARGON AND TARGET argon)
-    target_link_libraries(${PROJECT_NAME} argon)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE VERSUS_ARGON=1)
-else()
-    if(VERSUS_ARGON)
-        message(WARNING "Argon could not be fetched: building without the Argon test button")
+# Argon(GD 계정 인증, MIT, github.com/GlobedGD/argon)은 GD 2.209부터 Geode 모드(dankmeme.argon)라서
+# mod.json 의존성으로 받는다. 헤더와 라이브러리는 Geode가 빌드 폴더의 geode-deps로 연결한다.
+target_compile_definitions(${PROJECT_NAME} PRIVATE VERSUS_ARGON=1)
+
+# Eclipse(선택 의존성)의 설정 읽기 API. setup_geode_mod가 geode-deps에 받아 둔 Eclipse 패키지가 Geode 6용일
+# 때만 쓴다(src/EclipseApi.hpp). Geode CLI는 Geode 버전과 상관없이 mod.json 범위에 맞는 최신판을 받으므로,
+# Geode 6용 Eclipse가 아직 없으면 Geode 5용 패키지가 오고 그 헤더는 Geode 6에서 컴파일되지 않는다.
+# 1 = config.hpp가 패키지 맨 위(Geode CLI 4가 include/를 벗긴 배치), 2 = include/config.hpp, 0 = 쓸 수 없음.
+# 0이면 Versus는 Eclipse가 로드돼 있기만 해도 대결에서 금지 기능으로 본다. 새 Eclipse API가 맞지 않아
+# 빌드가 깨지면 -DVERSUS_USE_ECLIPSE_API=OFF로 0을 강제할 수 있다.
+option(VERSUS_USE_ECLIPSE_API "Use Eclipse's settings API when a Geode 6 Eclipse package is there" ON)
+set(VERSUS_ECLIPSE_API 0)
+set(VERSUS_ECLIPSE_DEP "${CMAKE_CURRENT_BINARY_DIR}/geode-deps/eclipse.eclipse-menu")
+if(VERSUS_USE_ECLIPSE_API AND EXISTS "${VERSUS_ECLIPSE_DEP}/mod.json")
+    file(READ "${VERSUS_ECLIPSE_DEP}/mod.json" VERSUS_ECLIPSE_JSON)
+    string(JSON VERSUS_ECLIPSE_GEODE ERROR_VARIABLE VERSUS_ECLIPSE_ERROR GET "${VERSUS_ECLIPSE_JSON}" geode)
+    set(VERSUS_ECLIPSE_MAJOR 0)
+    if(NOT VERSUS_ECLIPSE_ERROR AND VERSUS_ECLIPSE_GEODE MATCHES "^v?([0-9]+)")
+        set(VERSUS_ECLIPSE_MAJOR "${CMAKE_MATCH_1}")
     endif()
-    target_compile_definitions(${PROJECT_NAME} PRIVATE VERSUS_ARGON=0)
+    if(VERSUS_ECLIPSE_MAJOR GREATER_EQUAL 6)
+        if(EXISTS "${VERSUS_ECLIPSE_DEP}/config.hpp")
+            set(VERSUS_ECLIPSE_API 1)
+        elseif(EXISTS "${VERSUS_ECLIPSE_DEP}/include/config.hpp")
+            set(VERSUS_ECLIPSE_API 2)
+        endif()
+    endif()
+    message(STATUS "Versus: Eclipse package for Geode ${VERSUS_ECLIPSE_GEODE} -> Eclipse API ${VERSUS_ECLIPSE_API}")
+else()
+    message(STATUS "Versus: Eclipse API 0 (no Eclipse package or VERSUS_USE_ECLIPSE_API=OFF)")
 endif()
+target_compile_definitions(${PROJECT_NAME} PRIVATE VERSUS_ECLIPSE_API=${VERSUS_ECLIPSE_API})

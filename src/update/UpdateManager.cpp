@@ -4,6 +4,7 @@
 #include "UpdateManager.hpp"
 #include "../Edition.hpp"
 #include "../DebugMode.hpp"
+#include "../PathCompat.hpp"
 #include <Geode/binding/GJAccountManager.hpp>
 #include "UpdateIntegration.hpp"
 #include <Geode/Geode.hpp>
@@ -26,7 +27,7 @@ namespace {
 // 받은 파일은 매니페스트의 크기와 SHA-256으로 검증한다.
 web::WebRequest request() {
     auto req = web::WebRequest();
-    req.timeout(std::chrono::seconds(20));
+    req.timeout(asp::Duration::fromSecs(20));
     req.certVerification(true);
     req.followRedirects(true);
     req.acceptEncoding("identity");
@@ -112,14 +113,14 @@ void UpdateManager::check() {
     }
     try {
         auto* mod = Mod::get();
-        m_context.directory = mod->getSaveDir() / "updater";
-        regularOrAbsent(mod->getPackagePath());
+        m_context.directory = versus::stdPath(mod->getSaveDir() / "updater");
+        regularOrAbsent(versus::stdPath(mod->getPackagePath()));
         auto* account = GJAccountManager::sharedState();
         m_creator = account && (debug::debugAccount(std::string(account->m_username), account->m_accountID) ||
                                 debug::listedAccount(mod->getSavedValue<std::string>(debug::kStaffAccountsKey, ""),
                                                      account->m_accountID));
-        m_context.package = fs::weakly_canonical(mod->getPackagePath());
-        m_context.modsDirectory = dirs::getModsDir();
+        m_context.package = fs::weakly_canonical(versus::stdPath(mod->getPackagePath()));
+        m_context.modsDirectory = versus::stdPath(dirs::getModsDir());
         {
             std::lock_guard lock(m_mutex);
             m_snapshot.installedVersion = mod->getVersion().toNonVString();
@@ -184,11 +185,11 @@ void UpdateManager::performCheck() {
 // 요구하는 Geode 로더 버전.
 void UpdateManager::validateArchive(fs::path const& path, Manifest const& manifest) {
     verifyFile(path, manifest);
-    auto meta = ModMetadata::createFromGeodeFile(path);
+    auto meta = ModMetadata::createFromGeodeFile(versus::geodePath(path));
     requirePackage(!meta.hasErrors(), "Downloaded file is not a valid Geode package");
     requirePackage(meta.getID() == "tipp7.versus" && meta.getVersion().toNonVString() == manifest.version,
                    "Package version mismatch");
-    auto zip = file::Unzip::create(path);
+    auto zip = file::Unzip::create(versus::geodePath(path));
     requirePackage(zip.isOk(), "Cannot open downloaded package");
     requirePackage(zip.unwrap().hasEntry(std::string(meta.getBinaryName())),
                    "This update does not support your platform");
@@ -219,7 +220,7 @@ std::optional<PatchPlan> UpdateManager::loadPatch(Manifest const& manifest) {
         if (url.empty() || m_cancel) return std::nullopt;
         auto send = [&] {
             auto req = request();
-            req.timeout(std::chrono::seconds(6));
+            req.timeout(asp::Duration::fromSecs(6));
             return req.getSync(url);
         };
         auto response = send();
@@ -366,7 +367,7 @@ void UpdateManager::download() {
                 std::lock_guard lock(m_mutex);
                 m_snapshot.busy = false;
                 m_snapshot.downloaded = manifest.size;
-                m_snapshot.downloadedPath = utils::string::pathToString(ready);
+                m_snapshot.downloadedPath = versus::pathText(ready);
                 m_snapshot.state = automatic ? UpdateState::ReadyToInstall : UpdateState::VerifiedDownloaded;
                 m_snapshot.message =
                     automatic ? "최신버전 다운로드 완료!\n업데이트 적용을 위해 Geometry Dash를 재시작해야 합니다."

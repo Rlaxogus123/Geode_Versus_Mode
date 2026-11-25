@@ -261,7 +261,7 @@ class Season2DuelPopup final : public ::versus::DeferredPopup {
         m_input->setCommonFilter(CommonFilter::Any);
         m_input->setMaxCharCount(20);
         m_input->setScale(.75f);
-        m_input->setWidth(inputW / .75f);
+        m_input->setContentSize({inputW / .75f, m_input->getContentHeight()});
         m_input->setPosition({InputLeft + inputW / 2.f, H - 110.f});
         styleInput(m_input);
         m_mainLayer->addChild(m_input, 4);
@@ -280,7 +280,7 @@ class Season2DuelPopup final : public ::versus::DeferredPopup {
         return true;
     }
     void onExit() override {
-        if (m_input) m_input->defocus();
+        if (m_input) m_input->unfocus();
         Popup::onExit();
     }
     // 현재 목록(검색 결과 또는 최근 상대)을 행으로 그린다: 아이콘, 이름, 상태, 가능한 상대에게는 Duel 버튼.
@@ -388,7 +388,7 @@ class Season2DuelPopup final : public ::versus::DeferredPopup {
             renderLater();
             return;
         }
-        m_input->defocus();
+        m_input->unfocus();
         m_searching = true;
         m_found.clear();
         m_searchHint = "Searching...";
@@ -410,7 +410,7 @@ class Season2DuelPopup final : public ::versus::DeferredPopup {
         m_loadingRecent = true;
         m_recent.clear();
         m_recentHint = "Loading your duels...";
-        if (m_input) m_input->defocus();
+        if (m_input) m_input->unfocus();
         renderLater();
         int const serial = ++m_recentSerial;
         Service::get().recentSeason2Duels(

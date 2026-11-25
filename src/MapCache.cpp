@@ -3,6 +3,7 @@
 // 내려받은 레벨은 최대 8개까지 메모리에 두고, 배틀용으로만 받은 레벨은 GD Saved 목록에서 빼 둔다.
 #include "MapCache.hpp"
 #include "BattleLevelData.hpp"
+#include "GdCompat.hpp"
 #include "GdRequests.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GameLevelManager.hpp>
@@ -25,7 +26,7 @@ using namespace geode::prelude;
 namespace {
 using Clock = std::chrono::steady_clock;
 // "1,2,3" 형태의 ID 목록을 파싱해 양수 ID만 result에 넣는다.
-void ids(std::set<int>& result, gd::string const& source) {
+void ids(std::set<int>& result, std::string const& source) {
     std::string value(source);
     for (size_t start = 0; start < value.size();) {
         auto end = value.find(',', start);
@@ -303,9 +304,9 @@ public:
     }
     // GD의 stopDownload와 같은 방식으로 오디오 요청 하나를 취소한다.
     static void stopRequest(MusicDownloadManager* music, char const* key) {
-        if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(music->getDLObject(key)))
+        if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(versus::gd::musicRequest(music, key)))
             request->setShouldCancel(true);
-        music->removeDLFromActive(key);
+        versus::gd::forgetMusicRequest(music, key);
     }
     // 지금 작업이 요청한 오디오 중 대기열의 다른 맵이 쓰지 않는 것을 멈춘다.
     void stopQueuedAudio() {
@@ -485,7 +486,7 @@ public:
     static std::string savedKey(CCDictionary* saved, int id) {
         if (!saved) return {};
         std::string const direct = std::to_string(id);
-        if (auto* found = typeinfo_cast<GJGameLevel*>(saved->objectForKey(gd::string(direct)));
+        if (auto* found = typeinfo_cast<GJGameLevel*>(saved->objectForKey(std::string(direct)));
             found && found->m_levelID.value() == id)
             return direct;
         for (auto [key, value] : CCDictionaryExt<std::string, CCObject*>(saved)) {
@@ -509,7 +510,7 @@ public:
         auto* saved = savedLevels();
         auto* value = level(id);
         if (saved && value && savedKey(saved, id).empty()) {
-            saved->setObject(value, gd::string(found->second));
+            saved->setObject(value, std::string(found->second));
             log::info("Versus map {}: back in GD's Saved (played from LIVE)", id);
         }
         unsaved.erase(found);
@@ -524,7 +525,7 @@ private:
             if (!saved || keepSaved.contains(id)) continue;
             auto const key = savedKey(saved, id);
             if (key.empty()) continue;
-            saved->removeObjectForKey(gd::string(key));
+            saved->removeObjectForKey(std::string(key));
             unsaved[id] = key;
             log::info("Versus map {}: taken out of GD's Saved (downloaded only for Versus)", id);
         }
@@ -620,7 +621,7 @@ public:
             auto const& required = assetsFor(value);
             songs = required.first;
             sounds = required.second;
-            music->tryLoadLibraries();
+            versus::gd::loadAudioLibraries(music);
             music->addMusicDownloadDelegate(this);
             watchingMusic = true;
             progressed = audioBegan = Clock::now();

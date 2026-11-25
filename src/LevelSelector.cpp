@@ -249,12 +249,28 @@ void openLevelSearch(std::function<void(LevelInfo)> onSelected) {
 }
 
 // 선택 모드일 때 검색 화면에 감시 노드를 붙이고, 뒤로 가기를 방 복귀로 바꾼다.
+// iOS 2.2091 바인딩에는 onBack 주소가 없어서, iOS에서는 뒤로 가기 버튼(Node IDs의 exit-button) 콜백을 바꾼다.
 class $modify(VersusNativeLevelSearch,
               LevelSearchLayer){bool init(int type){if (!LevelSearchLayer::init(type)) return false;
 markPicker(this);
+#ifdef GEODE_IS_IOS
+if (ownsNode(this))
+    if (auto* back = typeinfo_cast<CCMenuItem*>(getChildByIDRecursive("exit-button")))
+        back->setTarget(this, menu_selector(VersusNativeLevelSearch::onVersusBack));
+#endif
 return true;
 }
 
+#ifdef GEODE_IS_IOS
+// 선택이 이미 끝났으면 GD의 원래 뒤로 가기(keyBackClicked가 onBack을 부른다)로 넘긴다.
+void onVersusBack(CCObject*) {
+    if (ownsNode(this)) {
+        returnToRoom();
+        return;
+    }
+    keyBackClicked();
+}
+#else
 void onBack(CCObject* sender) {
     if (ownsNode(this)) {
         returnToRoom();
@@ -262,6 +278,7 @@ void onBack(CCObject* sender) {
     }
     LevelSearchLayer::onBack(sender);
 }
+#endif
 }
 ;
 

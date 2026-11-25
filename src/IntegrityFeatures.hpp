@@ -45,8 +45,12 @@ inline constexpr std::array<CheatFeature, 21> kQolCheatFeatures{{
     {"layout-mode", "Show Layout"},
 }};
 
+// Eclipse 설정을 읽을 수 없는 빌드에서 Eclipse가 로드돼 있을 때 보내는 키. Eclipse의 설정 키가 아니다
+// (ExternalCheatMonitor.cpp의 eclipseStatus).
+inline constexpr std::string_view kEclipseUnchecked = "versus.unchecked";
+
 // Eclipse에서 금지하는 기능 키 목록.
-inline constexpr std::array<CheatFeature, 22> kEclipseCheatFeatures{{
+inline constexpr std::array<CheatFeature, 23> kEclipseCheatFeatures{{
     {"player.respawndelay.toggle", "Slower Respawn Time"},
     {"global.tpsbypass.toggle", "TPS Bypass"},
     {"level.autopickupcoins", "Auto Collect Coins"},
@@ -69,6 +73,7 @@ inline constexpr std::array<CheatFeature, 22> kEclipseCheatFeatures{{
     {"bot.state", "Replay Bot"},
     {"level.showlayout", "Show Layout"},
     {"level.layoutmode", "Show Layout"},
+    {kEclipseUnchecked, "Settings unreadable - turn Eclipse off or update Versus"},
 }};
 
 // 로드되어 있으면 안 되는 모드(Geode 모드 ID와 이름).
@@ -90,7 +95,7 @@ template <typename ReadBool> inline std::vector<std::string> activeEclipseBoolea
     std::vector<std::string> detected;
     for (auto const& cheat : kEclipseCheatFeatures) {
         if (cheat.key == "global.speedhack.toggle" || cheat.key == "bot.state" ||
-            cheat.key == "player.respawndelay.toggle")
+            cheat.key == "player.respawndelay.toggle" || cheat.key == kEclipseUnchecked)
             continue;
         if (readBool(cheat.key)) detected.emplace_back(cheat.key);
     }

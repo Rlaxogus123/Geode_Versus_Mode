@@ -17,9 +17,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Geode CLI 버전 고정(v1.0.5를 빌드할 때의 최신 릴리스). 빌드 액션도 아래에서 커밋으로 고정한다(main, 2026-11-03).
-  # 둘 중 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는 보장이 없어진다.
-  GEODE_CLI: v4.0.0
+  # Geode CLI 버전 고정(Geode 6 SDK는 v4.0.1 이상이 필요하다, 2026-11-25 최신 릴리스). 빌드 액션도 아래에서 커밋으로
+  # 고정한다(main, 2026-11-23). 둘 중 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는 보장이 없어진다.
+  GEODE_CLI: v4.0.2
 
 jobs:
   build:
@@ -86,15 +86,16 @@ jobs:
           if [ "$RUNNER_OS" = "macOS" ]; then xcodebuild -version | sed -n 1p || true; fi
 
       - name: Build
-        uses: geode-sdk/build-geode-mod@61a56c697aea9655e3f31c6c1b83870431f30434
+        uses: geode-sdk/build-geode-mod@dce36b35e1c3d9d8af92347760b12eba3caf4004
         with:
           combine: true
           cli: ${{ env.GEODE_CLI }}
           target: ${{ matrix.config.target }}
           # 코드 생성기(Codegen)도 고정한 바인딩 커밋에서 직접 빌드한다 (미리 빌드된 최신본은 형식이 다름).
           configure-args: -DSKIP_BUILDING_CODEGEN=OFF ${{ matrix.config.args }}
-          # 라이브 빌드와 같은 GD 바인딩 커밋으로 고정한다 (최신 main은 SDK 5.7.1과 안 맞음).
-          bindings-ref: 7f6c2a75742856de88dad354e576dcff8a28e881
+          # GD 2.2091 바인딩 커밋으로 고정한다 (main, 2026-11-25). iOS / macOS 주소가 계속 채워지는 중이라
+          # 올릴 때는 src/GdCompat.hpp의 플랫폼 분기와 함께 확인한다.
+          bindings-ref: 975068022f6164c483907274909ad2f700c6d646
 
   release:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Reproduce' || 'Release' }}
@@ -109,10 +110,10 @@ jobs:
 
       - name: Combine the platforms
         id: combine
-        uses: geode-sdk/build-geode-mod/combine@61a56c697aea9655e3f31c6c1b83870431f30434
+        uses: geode-sdk/build-geode-mod/combine@dce36b35e1c3d9d8af92347760b12eba3caf4004
         with:
           cli: ${{ env.GEODE_CLI }}
-          # zstd로 묶으면 Geode 5.9.0보다 오래된 로더가 열지 못한다. v1.0.5까지와 같이 deflate.
+          # 재현 확인 도구(tools/geode_package.py)가 deflate 묶음을 기준으로 하므로 v1.0.5부터와 같이 deflate.
           zstd: false
           optimize-pngs: true
 

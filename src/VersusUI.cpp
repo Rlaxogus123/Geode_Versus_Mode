@@ -44,6 +44,7 @@
 #include "GroupResult.hpp"
 #include "BattleProgress.hpp"
 #include "BattleSession.hpp"
+#include "GdCompat.hpp"
 #include "PortableActions.hpp"
 #include "Season2Lounge.hpp"
 #include "GoatFace.hpp"
@@ -72,9 +73,6 @@
 #include <Geode/binding/Slider.hpp>
 #include <Geode/binding/GJAccountManager.hpp>
 #include <Geode/binding/CCCircleWave.hpp>
-#if VERSUS_ARGON
-#include <argon/argon.hpp>
-#endif
 
 #include <algorithm>
 #include <deque>
@@ -828,7 +826,7 @@ class LobbySongPopup final : public ::versus::DeferredPopup {
     TextInput* m_search = nullptr;
     CCLabelBMFont* m_status = nullptr;
     void onExit() override {
-        if (m_search) m_search->defocus();
+        if (m_search) m_search->unfocus();
         Popup::onExit();
     }
     struct Song {
@@ -995,7 +993,7 @@ class LobbySongPopup final : public ::versus::DeferredPopup {
         m_search->setCommonFilter(CommonFilter::Any);
         m_search->setMaxCharCount(40);
         m_search->setScale(.75f);
-        m_search->setWidth((kWidth - 40.f) / .75f);
+        m_search->setContentSize({(kWidth - 40.f) / .75f, m_search->getContentHeight()});
         m_search->setPosition({kWidth / 2.f, kHeight - 50.f});
         styleInput(m_search);
         m_search->setCallback([self = Weak<LobbySongPopup>(this)](std::string const& text) {
@@ -1846,7 +1844,7 @@ class CreateRoomPopup : public ::versus::DeferredPopup {
     CCLabelBMFont* m_modeNote = nullptr;
     TextInput* m_playersInput = nullptr;
     void onExit() override {
-        if (m_playersInput) m_playersInput->defocus();
+        if (m_playersInput) m_playersInput->unfocus();
         Popup::onExit();
     }
 
@@ -1863,7 +1861,7 @@ class CreateRoomPopup : public ::versus::DeferredPopup {
         m_players->setVisible(!m_group);
         m_playersInput->setVisible(m_group);
         m_playersInput->setEnabled(m_group && !m_pending);
-        if (!m_group) m_playersInput->defocus();
+        if (!m_group) m_playersInput->unfocus();
         m_playersCaption->setString(m_group ? "MAX PLAYERS" : "PLAYERS");
         m_modeNote->setString(m_group ? "Lives match - host-only emotes & chat" : "");
         enabled(m_fewer, !m_pending && m_maxPlayers > kGroupMinPlayers);
@@ -2008,7 +2006,7 @@ class CreateRoomPopup : public ::versus::DeferredPopup {
                 return;
             }
             m_maxPlayers = typed;
-            m_playersInput->defocus();
+            m_playersInput->unfocus();
         }
         if (m_private && !validPin(pin)) {
             error("Set a password of <cy>1-32 digits</c> first.");
@@ -2574,7 +2572,7 @@ class CancelMatchesPopup final : public ::versus::DeferredPopup {
     TextInput* m_reason = nullptr;
     std::function<void(std::string)> m_confirm;
     void onExit() override {
-        if (m_reason) m_reason->defocus();
+        if (m_reason) m_reason->unfocus();
         Popup::onExit();
     }
     void onBack(CCObject*) { onClose(nullptr); }
@@ -2585,7 +2583,7 @@ class CancelMatchesPopup final : public ::versus::DeferredPopup {
             error("Enter a reason. The refunded players will see it.");
             return;
         }
-        m_reason->defocus();
+        m_reason->unfocus();
         auto confirm = std::move(m_confirm);
         onClose(nullptr);
         if (confirm) confirm(std::move(reason));
@@ -3544,7 +3542,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
     TextInput* m_value = nullptr;
     CCLabelBMFont* m_valueTitle = nullptr;
     void onExit() override {
-        if (m_value) m_value->defocus();
+        if (m_value) m_value->unfocus();
         Popup::onExit();
     }
 
@@ -3818,7 +3816,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
             m_random = needsRandomDraw(*room);
         }
         readValue();
-        m_value->defocus();
+        m_value->unfocus();
         m_rules.autoLives = !m_auto->isToggled();
         refresh();
     }
@@ -3835,7 +3833,7 @@ class GameRulesPopup : public ::versus::DeferredPopup {
             error("Only the host can edit rules before a match.");
             return;
         }
-        m_value->defocus();
+        m_value->unfocus();
         m_pending = true;
         refresh();
         enabled(m_save, false);
@@ -3891,7 +3889,7 @@ class LobbyLayer : public SceneLayer {
     TextInput* m_search = nullptr;
     CCLabelBMFont* m_status = nullptr;
     void onExit() override {
-        if (m_search) m_search->defocus();
+        if (m_search) m_search->unfocus();
         SceneLayer::onExit();
     }
     size_t m_rowsShown = 0;
@@ -3956,7 +3954,7 @@ class LobbyLayer : public SceneLayer {
         m_search->setCommonFilter(CommonFilter::Any);
         m_search->setMaxCharCount(32);
         m_search->setScale(.75f);
-        m_search->setWidth((m_listWidth - 30.f) / .75f);
+        m_search->setContentSize({(m_listWidth - 30.f) / .75f, m_search->getContentHeight()});
         m_search->setPosition({m_listWidth / 2.f, m_height - 48.f});
         styleInput(m_search);
         m_search->setCallback([self = Weak<LobbyLayer>(this)](std::string const&) {
@@ -4364,20 +4362,20 @@ class LobbyLayer : public SceneLayer {
     // 방 만들기 팝업을 연다. 연결 전/통계 로딩 중/다른 요청 중에는 열지 않는다.
     void onCreate(CCObject*) {
         if (!m_mutating && !m_transitioning && !m_loadingStats && Service::get().connected()) {
-            m_search->defocus();
+            m_search->unfocus();
             if (auto* popup = CreateRoomPopup::create()) popup->show();
         }
     }
     void onHistory(CCObject*) {
         if (!m_mutating && !m_transitioning) {
-            m_search->defocus();
+            m_search->unfocus();
             if (auto* popup = HistoryPopup::create()) popup->show();
         }
     }
     // 디버그 모드에서만 쓰는 디버그 방 만들기 팝업.
     void onDebugRoom(CCObject*) {
         if (!debug::active() || m_mutating || m_transitioning || Service::get().busy()) return;
-        m_search->defocus();
+        m_search->unfocus();
         if (auto* popup = CreateRoomPopup::create(true)) popup->show();
     }
     // 새로고침 버튼: 연결되지 않았으면 다시 연결하고, 연결돼 있으면 방 목록을 수동 갱신한다.
@@ -4404,7 +4402,7 @@ class LobbyLayer : public SceneLayer {
         if (index < 0 || static_cast<size_t>(index) >= m_rooms.size()) return;
         auto const room = m_rooms[static_cast<size_t>(index)];
         if (room.guest || room.started) return;
-        m_search->defocus();
+        m_search->unfocus();
         if (room.privateRoom) {
             if (auto* popup = JoinRoomPopup::create(room)) popup->show();
             return;
@@ -4434,7 +4432,7 @@ class LobbyLayer : public SceneLayer {
         if (index >= m_groups.size()) return;
         auto const room = m_groups[index];
         if (room.count >= room.maxPlayers) return;
-        m_search->defocus();
+        m_search->unfocus();
         if (room.privateRoom) {
             if (auto* popup = JoinGroupPopup::create(room)) popup->show();
             return;
@@ -4463,7 +4461,7 @@ class LobbyLayer : public SceneLayer {
     void goBack() override {
         if (m_mutating || m_transitioning || Service::get().busy()) return;
         m_transitioning = true;
-        m_search->defocus();
+        m_search->unfocus();
         showVersus();
     }
 

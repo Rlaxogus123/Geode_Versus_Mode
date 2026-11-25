@@ -256,7 +256,7 @@ public:
         began = next = Clock::now();
     }
     // 서버가 알려 주는 페이지 정보 문자열의 첫 필드(전체 레벨 수)를 읽어 현재 그룹에 반영한다.
-    void setupPageInfo(gd::string info, char const* value) override {
+    void setupPageInfo(std::string info, char const* value) override {
         if (!owns(value)) return;
         std::string text(info);
         int count = 0;
@@ -374,7 +374,7 @@ public:
         group.page = page;
         // 검색 객체 구성: ID 목록이면 Type19, 아니면 MostLiked에 난이도/길이/피처/2인 필터를 설정한다.
         if (!group.ids.empty()) {
-            search = GJSearchObject::create(SearchType::Type19, gd::string(group.ids + "&gameVersion=22"));
+            search = GJSearchObject::create(SearchType::Type19, std::string(group.ids + "&gameVersion=22"));
         } else {
             search = GJSearchObject::create(SearchType::MostLiked);
             search->m_page = page;
@@ -485,7 +485,7 @@ public:
         if (owns(key)) finish(std::nullopt, "Not found on GD's servers.");
     }
     void loadLevelsFailed(char const* key, int) override { loadLevelsFailed(key); }
-    void setupPageInfo(gd::string, char const*) override {}
+    void setupPageInfo(std::string, char const*) override {}
     void update(float) override {
         if (!m_done) return;
         auto const now = Clock::now();
@@ -494,7 +494,7 @@ public:
             return;
         }
         if (m_pending) return;
-        m_search = GJSearchObject::create(SearchType::Search, gd::string(std::to_string(m_id)));
+        m_search = GJSearchObject::create(SearchType::Search, std::string(std::to_string(m_id)));
         m_key = m_search->getKey();
         if (versus::gdnet::active(m_key)) return;
         m_pending = true;

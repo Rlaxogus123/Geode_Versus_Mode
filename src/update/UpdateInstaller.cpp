@@ -5,6 +5,7 @@
 #include "AndroidPackageTransaction.hpp"
 #include "WindowsUpdateReceipt.hpp"
 #include "../Edition.hpp"
+#include "../PathCompat.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/utils/file.hpp>
 #include <Geode/utils/string.hpp>
@@ -23,7 +24,7 @@ namespace {
 // Geode가 풀어 둔 모드 리소스 캐시가 갱신되도록 modified-at 표지를 바꿔 둔다.
 void invalidateExtraction() {
     std::error_code error;
-    auto path = dirs::getModRuntimeDir() / Mod::get()->getID() / "modified-at";
+    auto path = versus::stdPath(dirs::getModRuntimeDir() / Mod::get()->getID() / "modified-at");
     if (!fs::exists(path, error)) return;
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out << "versus-update";
@@ -38,7 +39,7 @@ public:
     PatchlessBinary() {
         std::string name(Mod::get()->getMetadata().getBinaryName());
         require(!name.empty() && name.find_first_of("/\\") == std::string::npos, "Unknown platform binary");
-        m_final = dirs::getModRuntimeDir() / "binaries" / name;
+        m_final = versus::stdPath(dirs::getModRuntimeDir() / "binaries" / name);
         m_next = m_final;
         m_next += ".versus-next";
     }
@@ -49,12 +50,12 @@ public:
     void stage(fs::path const& package) {
         regularOrAbsent(m_final);
         regularOrAbsent(m_next);
-        auto opened = file::Unzip::create(package);
+        auto opened = file::Unzip::create(versus::geodePath(package));
         require(opened.isOk(), "Cannot open the update package");
         auto& zip = opened.unwrap();
-        auto const name = m_final.filename();
+        auto const name = versus::pathText(m_final.filename());
         require(zip.hasEntry(name), "This update does not support your platform");
-        auto written = zip.extractTo(name, m_next);
+        auto written = zip.extractTo(name, versus::geodePath(m_next));
         if (!written) throw std::runtime_error("Cannot extract the update binary: " + written.unwrapErr());
         std::error_code error;
         require(fs::is_regular_file(m_next, error) && fs::file_size(m_next, error) > 0,
@@ -132,7 +133,7 @@ public:
 bool canRestart() {
 #ifdef GEODE_IS_WINDOWS
     std::error_code error;
-    return fs::is_regular_file(dirs::getGameDir() / "GeodeUpdater.exe", error);
+    return fs::is_regular_file(versus::stdPath(dirs::getGameDir() / "GeodeUpdater.exe"), error);
 #else
     return true;
 #endif
@@ -150,9 +151,9 @@ void reconcilePackageTransaction() {
     attempted = true;
     try {
         auto* mod = Mod::get();
-        auto root = mod->getSaveDir() / "updater";
+        auto root = versus::stdPath(mod->getSaveDir() / "updater");
         if (!fs::exists(root / "android-install.job")) return;
-        auto target = mod->getPackagePath(), mods = dirs::getModsDir();
+        auto target = versus::stdPath(mod->getPackagePath()), mods = versus::stdPath(dirs::getModsDir());
         auto version = mod->getVersion().toNonVString();
         if (PackageTransaction(root, target, mods).reconcile(version)) {
             invalidateExtraction();
@@ -161,7 +162,7 @@ void reconcilePackageTransaction() {
     } catch (std::exception const& error) {
         log::warn("Android update reconcile failed: {}", error.what());
         std::error_code ignored;
-        auto root = Mod::get()->getSaveDir() / "updater";
+        auto root = versus::stdPath(Mod::get()->getSaveDir() / "updater");
         fs::remove(root / "android-install.job", ignored);
         fs::remove(root / "android-boot-confirmed.txt", ignored);
     }
@@ -175,7 +176,7 @@ void confirmUpdateBoot() {
 #ifdef GEODE_IS_WINDOWS
     static std::string confirmedNonce;
     try {
-        auto root = Mod::get()->getSaveDir() / "updater";
+        auto root = versus::stdPath(Mod::get()->getSaveDir() / "updater");
         auto path = root / "install.job";
         if (!fs::is_regular_file(path) || fs::file_size(path) > 16384) return;
         std::ifstream in(path);
@@ -189,7 +190,7 @@ void confirmUpdateBoot() {
         if (rows[3] != Mod::get()->getVersion().toNonVString()) return;
         if (rows[5] != "member" && rows[5] != "public") return;
         if (rows[8] == confirmedNonce) return;
-        if (fs::weakly_canonical(fs::u8path(rows[1])) != fs::weakly_canonical(Mod::get()->getPackagePath())) return;
+        if (fs::weakly_canonical(fs::u8path(rows[1])) != fs::weakly_canonical(versus::stdPath(Mod::get()->getPackagePath()))) return;
         if (fs::weakly_canonical(fs::u8path(rows[11])) != fs::weakly_canonical(root)) return;
         writeWindowsBootReceipt(root, rows[8]);
         confirmedNonce = rows[8];

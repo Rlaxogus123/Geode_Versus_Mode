@@ -24,7 +24,7 @@
 #include "Season2Lounge.hpp"
 #include "RankedConfig.hpp"
 #if VERSUS_ARGON
-#include <argon/argon.hpp>
+#include <dankmeme.argon/argon.hpp>
 #endif
 
 #include <Geode/Geode.hpp>
@@ -1342,7 +1342,7 @@ void request(std::string method, std::string path, Json body, Response callback,
              std::string action = {}, std::string ifNoneEtag = {}, int timeoutSeconds = 8, bool idToken = false,
              std::string room = {}) {
     auto request = web::WebRequest();
-    request.timeout(std::chrono::seconds(timeoutSeconds));
+    request.timeout(asp::Duration::fromSecs(timeoutSeconds));
     request.header("Cache-Control", "no-cache");
     std::string const base = state().token;
     std::string const session = !idToken && sessionUsable() ? state().session : std::string();
@@ -1935,7 +1935,9 @@ constexpr int kArgonWaitSeconds = 15;
 // Argon이 없는 빌드에서는 즉시 오류를 돌려준다.
 void withArgonToken(int account, bool fresh, std::function<void(std::string, std::string)> done) {
 #if VERSUS_ARGON
-    if (fresh) argon::clearToken(account);
+    // Argon v2는 지금 로그인한 GD 계정의 토큰을 지운다 (account는 그 계정이다).
+    (void)account;
+    if (fresh) argon::clearToken();
     auto pending = std::make_shared<std::function<void(std::string, std::string)>>(std::move(done));
     auto once = [pending](std::string token, std::string error) {
         if (!*pending) return;
@@ -2027,7 +2029,7 @@ void signInAs(std::string customToken, std::string uid) {
         return;
     }
     auto request = web::WebRequest();
-    request.timeout(std::chrono::seconds(10));
+    request.timeout(asp::Duration::fromSecs(10));
     request.param("key", state().apiKey);
     auto body = Json::object();
     body["token"] = std::move(customToken);
@@ -2193,7 +2195,7 @@ void syncAccount(std::string argonToken, std::string argonError, bool argonFresh
 // Firebase 익명 가입 또는 refresh token으로 ID 토큰을 받은 뒤(50분 유효로 취급) 계정 동기화를 시작한다.
 void authenticate(std::string key, bool refresh) {
     auto request = web::WebRequest();
-    request.timeout(std::chrono::seconds(10));
+    request.timeout(asp::Duration::fromSecs(10));
     request.param("key", std::move(key));
     auto body = Json::object();
     std::string url;
@@ -2245,7 +2247,7 @@ void refreshTokenInBackground() {
     s.tokenRefreshing = true;
     s.refreshAt = Clock::now() + std::chrono::minutes(1);
     auto request = web::WebRequest();
-    request.timeout(std::chrono::seconds(10));
+    request.timeout(asp::Duration::fromSecs(10));
     request.param("key", std::move(key));
     request.header("Content-Type", "application/x-www-form-urlencoded");
     request.bodyString("grant_type=refresh_token&refresh_token=" + formEncode(s.refreshToken));

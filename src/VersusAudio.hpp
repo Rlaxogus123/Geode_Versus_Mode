@@ -56,5 +56,7 @@ void refetchLobbySong();
 void setCupSong(int songID);
 int cupSong();
 void refreshCupSong();
+// 일시정지 메뉴를 강제로 닫은 뒤 GD가 멈춰 둔 음악과 효과음을 다시 켠다.
+void resumeGameAudio();
 
 }

@@ -470,7 +470,7 @@ class MapSelectionPopup final : public ::versus::DeferredPopup {
     }
     // 닫힐 때 입력창 포커스를 푼다.
     void onExit() override {
-        if (m_likesInput) m_likesInput->defocus();
+        if (m_likesInput) m_likesInput->unfocus();
         Popup::onExit();
     }
     void onFewer(CCObject*) {

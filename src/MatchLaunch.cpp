@@ -10,6 +10,7 @@
 #include "BattleSession.hpp"
 #include "PercentGuard.hpp"
 #include "ExternalCheatMonitor.hpp"
+#include "GdCompat.hpp"
 #include "IntegrityMonitor.hpp"
 #include "VersusService.hpp"
 #include "VersusUI.hpp"
@@ -75,7 +76,7 @@ struct LevelStats {
     geode::SeedValueVSR normalPercent;
     geode::SeedValueRSV orbCompletion, newNormalPercent2;
     int practicePercent, bestTime, clicksTime, bestPoints, clicksPoints;
-    gd::string personalBests;
+    std::string personalBests;
     explicit LevelStats(GJGameLevel* level)
         : attempts(level->m_attempts), jumps(level->m_jumps), clicks(level->m_clicks),
           attemptTime(level->m_attemptTime), chk(level->m_chk), chkValid(level->m_isChkValid),
@@ -267,7 +268,7 @@ GJGameLevel* makeBattleLevel(GJGameLevel* source, bool lowDetail, std::uint64_t&
         battleLevel->m_levelString = original;
     else
         battleLevel->m_levelString =
-            compressed ? ZipUtils::compressString(gd::string(stripped), false, 11) : gd::string(stripped);
+            compressed ? ZipUtils::compressString(std::string(stripped), false, 6, 11) : std::string(stripped);
     versus::percent::prepareLevel(battleLevel);
     return battleLevel;
 }
@@ -305,7 +306,7 @@ bool currentSceneContains(CCNode* node) {
 }
 
 // "1,2,3" 형태의 ID 목록에서 양수 ID를 모은다.
-void collectIDs(std::set<int>& result, gd::string const& encoded) {
+void collectIDs(std::set<int>& result, std::string const& encoded) {
     std::string text(encoded);
     size_t start = 0;
     while (start < text.size()) {
@@ -708,7 +709,7 @@ public:
         collectIDs(effects, downloaded->m_sfxIDs);
         phase = Phase::Resources;
         auto* music = MusicDownloadManager::sharedState();
-        music->tryLoadLibraries();
+        versus::gd::loadAudioLibraries(music);
         music->addMusicDownloadDelegate(this);
         musicWatching = true;
         timer = 0.f;
@@ -825,7 +826,7 @@ public:
         }
         versus::replay::noteBattleLevel(levelID, level->m_levelVersion, hash, lowDetail);
         versus::percent::prepareLevel(battleLevel);
-        auto* scene = PlayLayer::scene(battleLevel, false, false);
+        auto* scene = PlayLayer::scene(battleLevel, false);
         constructing = false;
         if (realMap && realLevel) realLevel->m_lowDetailModeToggled = realLdm;
         if (!scene) {
@@ -1337,7 +1338,7 @@ void restorePendingCoins(std::vector<std::string> const& keys) {
     if (!stats) return;
     for (auto const& key : keys)
         if (!stats->hasUserCoin(key.c_str()) && !stats->hasPendingUserCoin(key.c_str()))
-            stats->storePendingUserCoin(key.c_str());
+            versus::gd::storePendingUserCoin(stats, key.c_str());
 }
 constexpr std::array<char const*, 2> kProgressStats{"1", "2"};
 // 확정된 진행을 실제 맵에 반영한다(시도/점프/클릭/시도 시간과 지정된 통계만). 보상과 기록 변경은 반영하지 않는다.
@@ -1531,11 +1532,11 @@ class $modify(VersusMatchPlayLayer, PlayLayer) {
             if (auto* coin = typeinfo_cast<EnhancedGameObject*>(object)) coin->m_hasUniqueCoin = false;
     }
     // 배틀 레벨을 만들 때 컨트롤러에 연결하고 Percentage 보호를 적용한다.
-    bool init(GJGameLevel * level, bool useReplay, bool dontCreateObjects) {
-        if (!LaunchController::running()) return PlayLayer::init(level, useReplay, dontCreateObjects);
+    bool init(GJGameLevel* level, bool dontCreateObjects) {
+        if (!LaunchController::running()) return PlayLayer::init(level, dontCreateObjects);
         auto& controller = LaunchController::get();
         if (controller.constructing && level && level->m_levelID.value() == controller.levelID) controller.attach(this);
-        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+        if (!PlayLayer::init(level, dontCreateObjects)) return false;
         m_fields->initialized = true;
         versus::percent::enforce(this);
         return true;
@@ -1559,6 +1560,8 @@ class $modify(VersusMatchPlayLayer, PlayLayer) {
         if (LaunchController::get().gated(this) || versus::battle::blocksGameplay(this)) return;
         PlayLayer::startGame();
     }
+    // iOS 2.2091 바인딩에는 startGameDelayed 주소가 없다. 그 경우에도 음악(startMusic)과 진행(update)은 막혀 있다.
+#ifndef GEODE_IS_IOS
     void startGameDelayed() {
         if (!LaunchController::running()) {
             PlayLayer::startGameDelayed();
@@ -1567,6 +1570,7 @@ class $modify(VersusMatchPlayLayer, PlayLayer) {
         if (LaunchController::get().gated(this) || versus::battle::blocksGameplay(this)) return;
         PlayLayer::startGameDelayed();
     }
+#endif
     void startMusic() {
         if (!LaunchController::running()) {
             PlayLayer::startMusic();
@@ -1612,13 +1616,14 @@ class $modify(VersusMatchPlayLayer, PlayLayer) {
         bool const previousCoinRead = s_readBattleCoins;
         if (controller.belongs(this)) {
             s_readBattleCoins = true;
-            setStartPosObject(nullptr);
+            setActiveStartPosObject(nullptr);
         }
         PlayLayer::resetLevel();
         s_readBattleCoins = previousCoinRead;
         versus::battle::afterReset(this);
     }
-    // 사망: 한 번만 처리하고 사망 후 세션에 알린다.
+    // 사망: 한 번만 처리하고 사망 후 세션에 알린다. 배틀 중에는 GD 재시도 화면 대신 자동 재시도로 다시 시작하게 한다
+    // (다시 시작해도 되는지는 resetLevel에서 세션이 정한다).
     void destroyPlayer(PlayerObject * player, GameObject * object) {
         if (!versus::battle::activeFor(this)) {
             PlayLayer::destroyPlayer(player, object);
@@ -1627,7 +1632,10 @@ class $modify(VersusMatchPlayLayer, PlayLayer) {
         Ref<PlayLayer> keepAlive(this);
         auto* effective = player ? player : m_player1;
         if (effective && effective->m_isDead) return;
-        PlayLayer::destroyPlayer(player, object);
+        {
+            versus::gd::AutoRetryScope retry;
+            PlayLayer::destroyPlayer(player, object);
+        }
         if (effective && (effective == m_player1 || (m_gameState.m_isDualMode && effective == m_player2))) {
             if (effective->m_isDead) versus::battle::died(this);
         }
@@ -1693,14 +1701,6 @@ class $modify(VersusMatchPlayLayer, PlayLayer) {
         }
         PlayLayer::showNewBest(newReward, orbs, diamonds, demonKey, noRetry, noTitle);
     }
-    // 배틀 중 재시도 화면 대신 바로 리셋한다.
-    void showRetryLayer() {
-        if (versus::battle::activeFor(this)) {
-            if (!versus::battle::blocksGameplay(this)) resetLevel();
-            return;
-        }
-        PlayLayer::showRetryLayer();
-    }
     // 연습 모드 전환은 배틀 규칙이 허용할 때만.
     void togglePracticeMode(bool practice) {
         if (!versus::battle::allowPracticeToggle(this, practice)) return;
@@ -1765,6 +1765,8 @@ bool realMapCheat(GJGameLevel* level) {
 }
 using ProgressKind = ProgressCall::Kind;
 // 배틀 중에는 GD 통계/보상/완료 기록 변경 호출을 막고(필요하면 장부에만 기록한다).
+// 2.2091 바인딩에 주소가 없는 플랫폼에서는 그 훅만 뺀다. 보상 함수들은 GD가 클리어할 때만 부르는데,
+// 배틀/리플레이/free play의 클리어는 테스트 모드로 처리되어 GD가 부르지 않는다.
 class $modify(VersusSafeStats, GameStatsManager){void incrementStat(char const* key, int amount){
     if (battleSafeMode()){if (key) recordProgress({ProgressKind::Stat, key, amount});
 return;
@@ -1785,6 +1787,7 @@ void completedLevel(GJGameLevel* level) {
     }
     GameStatsManager::completedLevel(level);
 }
+#ifndef GEODE_IS_IOS
 void completedStarLevel(GJGameLevel* level) {
     if (battleSafeMode()) {
         if (progressLevel(level)) recordProgress({ProgressKind::StarLevel});
@@ -1799,10 +1802,14 @@ void completedDemonLevel(GJGameLevel* level) {
     }
     GameStatsManager::completedDemonLevel(level);
 }
+#endif
+#ifndef GEODE_IS_INTEL_MAC
 GJRewardItem* completedDailyLevel(GJGameLevel* level) {
     if (battleSafeMode()) return nullptr;
     return GameStatsManager::completedDailyLevel(level);
 }
+#endif
+#ifndef GEODE_IS_IOS
 void awardCurrencyForLevel(GJGameLevel* level) {
     if (battleSafeMode()) {
         if (progressLevel(level)) recordProgress({ProgressKind::Currency});
@@ -1817,6 +1824,8 @@ void awardDiamondsForLevel(GJGameLevel* level) {
     }
     GameStatsManager::awardDiamondsForLevel(level);
 }
+#endif
+#if !defined(GEODE_IS_INTEL_MAC) && !defined(GEODE_IS_IOS)
 void markLevelAsCompletedAndClaimed(GJGameLevel* level) {
     if (battleSafeMode()) {
         if (progressLevel(level)) recordProgress({ProgressKind::Claimed});
@@ -1824,6 +1833,8 @@ void markLevelAsCompletedAndClaimed(GJGameLevel* level) {
     }
     GameStatsManager::markLevelAsCompletedAndClaimed(level);
 }
+#endif
+#ifndef GEODE_IS_ARM_MAC
 void storeUserCoin(char const* key) {
     if (battleSafeMode()) {
         if (key) recordProgress({ProgressKind::UserCoin, key});
@@ -1831,6 +1842,8 @@ void storeUserCoin(char const* key) {
     }
     GameStatsManager::storeUserCoin(key);
 }
+#endif
+#ifndef GEODE_IS_IOS
 void checkCoinAchievement(GJGameLevel* level) {
     if (battleSafeMode()) {
         if (progressLevel(level)) recordProgress({ProgressKind::CoinAchievement});
@@ -1838,16 +1851,20 @@ void checkCoinAchievement(GJGameLevel* level) {
     }
     GameStatsManager::checkCoinAchievement(level);
 }
+#endif
 }
 ;
 // 퍼센트와 업적 보고도 같은 방식으로 막는다.
+// iOS 2.2091 바인딩에는 reportPercentageForLevel 주소가 없다. 그 안에서 하는 업적 보고는 reportAchievementWithID 훅이 막는다.
 class $modify(VersusSafeGameManager, GameManager){
+#ifndef GEODE_IS_IOS
     void reportPercentageForLevel(int levelID, int percentage, bool isPlatformer){if (battleSafeMode()){
         if (levelID == s_progress.levelID) recordProgress({ProgressKind::Percentage, {}, percentage, 0, isPlatformer});
 return;
 }
 GameManager::reportPercentageForLevel(levelID, percentage, isPlatformer);
 }
+#endif
 void reportAchievementWithID(char const* key, int percent, bool dontNotify) {
     if (battleSafeMode()) {
         if (key) recordProgress({ProgressKind::Achievement, key, percent, 0, dontNotify});
@@ -1894,9 +1911,9 @@ GameLevelManager::saveLevel(level);
 class $modify(VersusPrismInitScope, PlayLayer){
     static void onModify(auto& self){(void)self.setHookPriorityBeforePre("PlayLayer::init", "firee.prism");
 }
-bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+bool init(GJGameLevel* level, bool dontCreateObjects) {
     versus::integrity::beginPrismInitScope();
-    bool const result = PlayLayer::init(level, useReplay, dontCreateObjects);
+    bool const result = PlayLayer::init(level, dontCreateObjects);
     versus::integrity::endPrismInitScope();
     return result;
 }
@@ -1906,8 +1923,8 @@ bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
 class $modify(VersusAfterPrismInit, PlayLayer){
     static void onModify(auto& self){(void)self.setHookPriorityAfterPre("PlayLayer::init", "firee.prism");
 }
-bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
-    bool const result = PlayLayer::init(level, useReplay, dontCreateObjects);
+bool init(GJGameLevel* level, bool dontCreateObjects) {
+    bool const result = PlayLayer::init(level, dontCreateObjects);
     if (result) versus::integrity::markPrismInitBaseReturned();
     return result;
 }
@@ -1976,6 +1993,7 @@ void update(float dt) {
         return;
     }
     if (LaunchController::get().gated(this) || versus::battle::blocksGameplay(this)) return;
+    if (battleLayer()) dropIgnoreDamage();
     float const simulated = battleLayer() ? std::min(dt, kMaxBattleFrameDelta) : dt;
     GJBaseGameLayer::update(battleLayer() ? simulated * versus::battle::speedFor(this) : simulated);
     versus::battle::simulated(this, simulated);
@@ -1997,6 +2015,16 @@ bool battleLayer() {
     if (!LaunchController::running()) return false;
     auto* play = typeinfo_cast<PlayLayer*>(static_cast<GJBaseGameLayer*>(this));
     return play && LaunchController::get().belongs(play);
+}
+// GD 2.209의 피해 무시(Ignore Damage)가 배틀 중에 켜져 있으면 바로 끈다.
+// 단축키는 handleAction에서 막고, 일시 정지 메뉴 버튼 같은 다른 경로로 켜진 것은 여기서 되돌린다.
+void dropIgnoreDamage() {
+    if (!m_ignoreDamage) return;
+    m_ignoreDamage = false;
+    if (m_player1) m_player1->m_maybeCanRunIntoBlocks = false;
+    if (m_player2) m_player2->m_maybeCanRunIntoBlocks = false;
+    if (auto* play = typeinfo_cast<PlayLayer*>(static_cast<GJBaseGameLayer*>(this))) play->updateTestModeLabel();
+    log::warn("Versus: Ignore Damage was on during a battle; turned it off");
 }
 bool hasUniqueCoin(EffectGameObject* object) {
     if (!s_nativeBattleComplete && battleLayer()) return false;
@@ -2026,25 +2054,46 @@ void processCommands(float dt, bool halfTick, bool lastTick) {
 }
 ;
 
-// UILayer 훅: 로딩 중이거나 차단 상태이면 터치/키 입력을 막고 Esc/뒤로 가기를 배틀 규칙에 맞게 처리한다.
+// UILayer 훅: 로딩 중이거나 차단 상태이면 터치/키 입력을 막고 일시 정지/뒤로 가기를 배틀 규칙에 맞게 처리한다.
+// GD 2.209부터 키보드·컨트롤러 입력은 키 바인드 액션이 되어 handleAction(GJActionID, down, ...)으로 들어온다.
+// Esc도 keyDown 안에서 handleAction(Pause)로 넘어오므로 키 입력은 모두 여기서 막는다.
 class $modify(VersusMatchUILayer, UILayer){bool ccTouchBegan(CCTouch * touch, CCEvent* event){
     if (!LaunchController::running()) return UILayer::ccTouchBegan(touch, event);
 if (LaunchController::get().gated(m_gameLayer) || versus::battle::blocksInput(m_gameLayer)) return false;
 return UILayer::ccTouchBegan(touch, event);
 }
-void keyDown(enumKeyCodes key, double timestamp) {
-    if (!LaunchController::running()) {
-        UILayer::keyDown(key, timestamp);
-        return;
+bool handleAction(int action, bool down, double timestamp) {
+    if (!LaunchController::running()) return UILayer::handleAction(action, down, timestamp);
+    auto const id = static_cast<GJActionID>(action);
+    if (!down) {
+        // Esc가 아닌 키에 일시 정지를 묶어 둔 경우에도 키를 떼면 길게 누르기를 멈춘다.
+        if (id == GJActionID::Pause) versus::battle::escapeKey(m_gameLayer, false);
+        return UILayer::handleAction(action, down, timestamp);
     }
-    if (LaunchController::get().gated(m_gameLayer)) return;
-    if (key == KEY_Escape && versus::battle::escapeKey(m_gameLayer, true)) return;
-    if (key == KEY_Escape && versus::battle::blocksPause(m_gameLayer)) {
-        deferLeave();
-        return;
+    if (LaunchController::get().gated(m_gameLayer)) return true;
+    if (id == GJActionID::Pause) {
+        if (versus::battle::escapeKey(m_gameLayer, true)) return true;
+        if (versus::battle::blocksPause(m_gameLayer)) {
+            deferLeave();
+            return true;
+        }
+        return UILayer::handleAction(action, down, timestamp);
     }
-    if (versus::battle::blocksInput(m_gameLayer) && key != KEY_Escape) return;
-    UILayer::keyDown(key, timestamp);
+    if (versus::battle::blocksInput(m_gameLayer)) return true;
+    if (battleOnlyBlocked(id) && versus::battle::activeFor(m_gameLayer)) return true;
+    return UILayer::handleAction(action, down, timestamp);
+}
+// 배틀에서는 못 쓰는 GD 2.209 액션: 시작 위치 전환(시도가 날아간다), 피해 무시, 속도 조절.
+static bool battleOnlyBlocked(GJActionID id) {
+    switch (id) {
+        case GJActionID::StartPosPrev:
+        case GJActionID::StartPosNext:
+        case GJActionID::StartPosNone:
+        case GJActionID::ToggleIgnoreDamage:
+        case GJActionID::TestModeIncrease:
+        case GJActionID::TestModeDecrease: return true;
+        default: return false;
+    }
 }
 void keyBackClicked() {
     if (!LaunchController::running()) {

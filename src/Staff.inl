@@ -224,7 +224,7 @@ class StaffWritePopup final : public ::versus::DeferredPopup {
     Submit m_submit;
     // 팝업이 사라질 때 입력창 포커스를 해제한다.
     void onExit() override {
-        if (m_input) m_input->defocus();
+        if (m_input) m_input->unfocus();
         Popup::onExit();
     }
     // UI 구성. answer(또는 제목 지정) 모드에서는 종류 선택 없이 본문만 쓴다.
@@ -327,7 +327,7 @@ class StaffWritePopup final : public ::versus::DeferredPopup {
             Notification::create("The clipboard is empty", NotificationIcon::Warning)->show();
             return;
         }
-        m_input->defocus();
+        m_input->unfocus();
         m_input->setString("");
         m_text = std::move(text);
         refresh();
@@ -337,7 +337,7 @@ class StaffWritePopup final : public ::versus::DeferredPopup {
     void onSend(CCObject*) {
         auto const text = trimmed(m_text);
         if (m_sending || text.empty() || utf8Length(text) > kMax || (!m_answer && m_kind < 0) || !m_submit) return;
-        m_input->defocus();
+        m_input->unfocus();
         m_sending = true;
         say("");
         refresh();
@@ -962,7 +962,7 @@ class StaffPopup final : public ::versus::DeferredPopup {
     CCLabelBMFont* m_pageLabel = nullptr;
     CCMenuItemSpriteExtra *m_previous = nullptr, *m_next = nullptr, *m_find = nullptr;
     void onExit() override {
-        if (m_name) m_name->defocus();
+        if (m_name) m_name->unfocus();
         Popup::onExit();
     }
     bool init() override {
@@ -1077,7 +1077,7 @@ class StaffPopup final : public ::versus::DeferredPopup {
     // 입력한 GD 이름으로 Versus 플레이어를 검색한다. 결과가 없으면 알린다.
     void onFind(CCObject*) {
         if (m_busy) return;
-        m_name->defocus();
+        m_name->unfocus();
         std::string name(m_name->getString());
         if (name.find_first_not_of(' ') == std::string::npos) {
             Notification::create("Enter a GD name", NotificationIcon::Warning)->show();

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0 (in progress)
+
+### Geometry Dash 2.2091
+- Versus now runs on Geometry Dash 2.2091 with Geode 6 on Windows, macOS, Android and iOS, and no longer runs on 2.2081. Update the game and Geode first, then install this version (an older Versus can't update itself into it).
+- GD account linking uses Argon 2, which Geode installs together with Versus.
+- Battles follow the new 2.2091 keybinds: jump, pause and the other game keys work with the keys you bound yourself, and holding any key bound to Pause works like holding Esc.
+- The new start position switching, Ignore Damage and game speed keys of 2.2091 can't be used in battles.
+- Eclipse: Versus reads Eclipse's settings through Eclipse's own API, which needs an Eclipse made for Geode 6. While this Versus can't read them, a loaded Eclipse counts as a banned feature in battles: turn Eclipse off in Geode, or update Versus once it supports your Eclipse.
+
+### Fixes
+- macOS (Apple Silicon): with Versus installed the keyboard did nothing in levels (no jump, no pause; the mouse still worked), and with Eclipse the game could crash on a key press. Versus no longer hooks the short key function that caused it.
+
 ## v1.0.8 (in progress)
 
 ### Rooms

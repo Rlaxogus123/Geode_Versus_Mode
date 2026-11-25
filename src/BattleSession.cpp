@@ -4,6 +4,7 @@
 // 또한 일시 정지 예산, 안티치트 실격, 워치독(멈춤 복구), 리롤 투표, 배속 처리를 담당한다.
 #include "ExecutionEffects.hpp"
 #include "BattleSession.hpp"
+#include "GdCompat.hpp"
 #include "Particles.hpp"
 #include "BattleProgress.hpp"
 #include "IntegrityMonitor.hpp"
@@ -1563,10 +1564,7 @@ public:
             }
         }
         if (owner->m_isPaused) owner->resume();
-        if (auto* engine = FMODAudioEngine::sharedEngine()) {
-            engine->resumeAllAudio();
-            engine->resumeAllEffects();
-        }
+        versus::audio::resumeGameAudio();
     }
     // 리롤 투표 알림(HUD 줄과 효과음)을 표시한다.
     void noteReroll(int64_t at, int64_t& shown, bool hostSide) {
@@ -2223,7 +2221,7 @@ public:
             sprite->onEnter();
             revived = true;
         }
-        if (CCDirector::sharedDirector()->getScheduler()->isTargetPaused(sprite)) revived = true;
+        if (versus::gd::targetPaused(CCDirector::sharedDirector()->getScheduler(), sprite)) revived = true;
         resumeTree(sprite);
         return revived;
     }
@@ -2256,14 +2254,14 @@ public:
         }
         auto* scheduler = CCDirector::sharedDirector()->getScheduler();
         bool const menu = pauseLayerPresent(owner);
-        bool const halted = owner->m_isPaused || !owner->isRunning() || scheduler->isTargetPaused(owner);
+        bool const halted = owner->m_isPaused || !owner->isRunning() || versus::gd::targetPaused(scheduler, owner);
         if (halted && !menu) {
             haltClock += dt;
             if (haltClock >= 2.5f) {
                 haltClock = 0.f;
                 log::warn("[Versus watchdog] gameplay halted without a pause menu "
                           "(paused={}, running={}, scheduler-paused={}); resuming",
-                          owner->m_isPaused, owner->isRunning(), scheduler->isTargetPaused(owner));
+                          owner->m_isPaused, owner->isRunning(), versus::gd::targetPaused(scheduler, owner));
                 if (owner->m_isPaused) owner->resume();
                 if (!owner->isRunning()) owner->onEnter();
                 owner->resumeSchedulerAndActions();

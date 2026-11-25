@@ -1,18 +1,19 @@
 {
-  "geode": "5.7.1",
+  "geode": "6.0.0",
   "gd": {
-    "win": "2.2081",
-    "android": "2.2081",
-    "mac": "2.2081",
-    "ios": "2.2081"
+    "win": "2.2091",
+    "android": "2.2091",
+    "mac": "2.2091",
+    "ios": "2.2091"
   },
   "id": "tipp7.versus",
   "name": "Versus",
-  "version": "v1.0.8",
+  "version": "v1.1.0",
   "developer": "Tipp7",
   "description": "Create Classic 1 vs 1 or Group (up to 30 players) Versus rooms with custom rules, ready up, and compete on the same level!",
   "dependencies": {
     "geode.node-ids": ">=v1.22.0",
+    "dankmeme.argon": ">=v2.0.0-beta.1",
     "eclipse.eclipse-menu": {
       "version": ">=v1.9.4",
       "required": false

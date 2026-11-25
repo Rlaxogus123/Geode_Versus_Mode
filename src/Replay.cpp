@@ -6,6 +6,7 @@
 // 포맷 자체는 ReplayFormat.hpp에 있다.
 #include "Replay.hpp"
 #include "ExternalCheatMonitor.hpp"
+#include "GdCompat.hpp"
 #include "MapCache.hpp"
 #include "MatchLaunch.hpp"
 #include "PercentGuard.hpp"
@@ -393,7 +394,7 @@ void finishMatch() {
 
 namespace {
 // 쉼표로 구분된 ID 문자열(노래/효과음 목록)을 양수 ID 집합으로 파싱한다.
-void collectIDs(std::set<int>& result, gd::string const& encoded) {
+void collectIDs(std::set<int>& result, std::string const& encoded) {
     std::string text(encoded);
     std::size_t start = 0;
     while (start < text.size()) {
@@ -658,7 +659,7 @@ public:
         versus::snapshotBattleLevelStats(static_cast<int>(recording.levelId));
         versus::pauseBattleMods();
         constructing = true;
-        auto* scene = PlayLayer::scene(copy, false, false);
+        auto* scene = PlayLayer::scene(copy, false);
         constructing = false;
         if (!scene || !play.lock()) {
             versus::restoreBattleLevelStats();
@@ -1860,13 +1861,14 @@ using versus::replay::Live;
 
 // PlayLayer 후킹. init에서 뷰어 레이어를 연결하고, 진입이 끝나면 HUD를 붙여 Ready로 넘긴다.
 // startGame/startGameDelayed는 뷰어 제어 중 막고, resetLevel/destroyPlayer/levelComplete는 재생 규칙에 맞게 처리한다.
+// 뷰어/라이브의 사망은 GD 재시도 화면 대신 자동 재시도로 처리해, 다시 시작할지는 resetLevel 훅이 정한다.
 class $modify(VersusReplayPlayLayer, PlayLayer){
-    bool init(GJGameLevel * level, bool useReplay, bool dontCreateObjects){auto* viewer = Viewer::peek();
+    bool init(GJGameLevel* level, bool dontCreateObjects){auto* viewer = Viewer::peek();
 if (viewer && viewer->constructing) {
     versus::rebind(viewer->play, static_cast<PlayLayer*>(this));
     versus::attachPausedMods(this);
 }
-return PlayLayer::init(level, useReplay, dontCreateObjects);
+return PlayLayer::init(level, dontCreateObjects);
 }
 void onEnterTransitionDidFinish() {
     PlayLayer::onEnterTransitionDidFinish();
@@ -1883,11 +1885,14 @@ void startGame() {
     if (viewer && viewer->owns(this) && !viewer->starting) return;
     PlayLayer::startGame();
 }
+// iOS 2.2091 바인딩에는 startGameDelayed 주소가 없다.
+#ifndef GEODE_IS_IOS
 void startGameDelayed() {
     auto* viewer = Viewer::peek();
     if (viewer && viewer->owns(this)) return;
     PlayLayer::startGameDelayed();
 }
+#endif
 void resetLevel() {
     if (auto* live = Live::peek(); live && live->owns(this)) {
         if (live->ownReset) PlayLayer::resetLevel();
@@ -1900,14 +1905,17 @@ void resetLevel() {
     }
     if (viewer->ended && !viewer->restart) return;
     viewer->restart = false;
-    setStartPosObject(nullptr);
+    setActiveStartPosObject(nullptr);
     versus::replay::seedAttempt(this, viewer->recording.seedBase, viewer->recording.run);
     PlayLayer::resetLevel();
     viewer->rearm();
 }
 void destroyPlayer(PlayerObject* player, GameObject* object) {
     if (auto* live = Live::peek(); live && live->owns(this)) {
-        if (live->deathAllowed()) PlayLayer::destroyPlayer(player, object);
+        if (live->deathAllowed()) {
+            versus::gd::AutoRetryScope retry;
+            PlayLayer::destroyPlayer(player, object);
+        }
         return;
     }
     auto* viewer = Viewer::peek();
@@ -1916,7 +1924,10 @@ void destroyPlayer(PlayerObject* player, GameObject* object) {
         return;
     }
     if (!viewer->armed || (!viewer->inputsOnly && viewer->recordedNow() < viewer->recording.endStep)) return;
-    PlayLayer::destroyPlayer(player, object);
+    {
+        versus::gd::AutoRetryScope retry;
+        PlayLayer::destroyPlayer(player, object);
+    }
     bool const early = viewer->recordedNow() < viewer->recording.endStep;
     if (early && !viewer->ended &&
         ((m_player1 && m_player1->m_isDead) || (m_gameState.m_isDualMode && m_player2 && m_player2->m_isDead))) {
@@ -1947,11 +1958,6 @@ void showEndLayer() {
     auto* viewer = Viewer::peek();
     if (viewer && viewer->owns(this)) return;
     PlayLayer::showEndLayer();
-}
-void showRetryLayer() {
-    auto* viewer = Viewer::peek();
-    if (viewer && viewer->owns(this)) return;
-    PlayLayer::showRetryLayer();
 }
 void togglePracticeMode(bool practice) {
     auto* viewer = Viewer::peek();
@@ -2011,7 +2017,7 @@ using versus::replay::siteKey;
 
 class $modify(VersusSeededEffect, EffectGameObject){
     void triggerObject(GJBaseGameLayer * layer, int uniqueID,
-                       gd::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(1, this));
+                       std::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(1, this));
 EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
 }
 }
@@ -2019,7 +2025,7 @@ EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
 
 class $modify(VersusSeededRandom, RandTriggerGameObject){
     void triggerObject(GJBaseGameLayer * layer, int uniqueID,
-                       gd::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(2, this));
+                       std::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(2, this));
 RandTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
 }
 }
@@ -2027,7 +2033,7 @@ RandTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
 
 class $modify(VersusSeededSpawn, SpawnTriggerGameObject){
     void triggerObject(GJBaseGameLayer * layer, int uniqueID,
-                       gd::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(3, this));
+                       std::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(3, this));
 SpawnTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
 }
 }

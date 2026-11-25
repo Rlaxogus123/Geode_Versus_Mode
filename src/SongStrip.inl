@@ -21,7 +21,7 @@ std::optional<MapSong> mapSong(int64_t levelID) {
         song.id = 0;
         int const track = level->m_audioTrack;
         song.name = std::string(LevelTools::getAudioTitle(track));
-        song.artist = std::string(LevelTools::nameForArtist(LevelTools::artistForAudio(track)));
+        song.artist = versus::gd::artistName(LevelTools::artistForAudio(track));
     } else {
         auto* music = MusicDownloadManager::sharedState();
         SongInfoObject* info = song.id >= 10'000'000 ? music->getMusicObject(song.id) : nullptr;
@@ -95,7 +95,7 @@ public:
             SongInfoObject* info = library ? music->getMusicObject(songID) : nullptr;
             if (!info) info = music->getSongInfoObject(songID);
             if (!info) info = SongInfoObject::create(songID);
-            auto* widget = info ? CustomSongWidget::create(info, nullptr, false, false, false, false, false, library, 0)
+            auto* widget = info ? CustomSongWidget::create(info, nullptr, false, false, false, false, false, library, 0, false, false)
                                 : nullptr;
             if (!widget) return false;
             widget->setVisible(false);

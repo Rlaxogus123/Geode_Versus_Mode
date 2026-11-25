@@ -66,7 +66,7 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
     std::string m_query;
     // 닫힐 때 검색창 포커스를 해제한다.
     void onExit() override {
-        if (m_search) m_search->defocus();
+        if (m_search) m_search->unfocus();
         Popup::onExit();
     }
 
@@ -692,7 +692,7 @@ class LiveMatchesPopup final : public ::versus::DeferredPopup {
         m_search->setCommonFilter(CommonFilter::Any);
         m_search->setMaxCharCount(20);
         m_search->setScale(.75f);
-        m_search->setWidth(140.f / .75f);
+        m_search->setContentSize({140.f / .75f, m_search->getContentHeight()});
         m_search->setPosition({kWidth - 80.f, 244.f});
         styleInput(m_search);
         // 검색어를 소문자/양끝 공백 제거 후 바뀐 경우에만 목록을 다시 그린다.

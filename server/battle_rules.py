@@ -76,6 +76,8 @@ ECLIPSE_CHEAT_FEATURES = {
     "player.noclip", "player.noplatformersquish", "player.showtrajectory", "bot.playback",
     "global.speedhack.toggle", "bot.state",
     "level.showlayout", "level.layoutmode",
+    # Eclipse 설정이 아니다: Eclipse 설정 읽기 API 없이 빌드된 게임은 로드된 Eclipse를 이 키로 보고한다.
+    "versus.unchecked",
 }
 MEGAHACK_CHEAT_FEATURES = {
     "LEVEL/RESPAWN_TIME/HACK_RESPAWN_TIME",

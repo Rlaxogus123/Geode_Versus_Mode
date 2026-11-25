@@ -9,7 +9,7 @@
 #ifdef GEODE_IS_WINDOWS
 #include <Geode/modify/CCEGLView.hpp>
 #include <Windows.h>
-#include <eclipse.eclipse-menu/include/config.hpp>
+#include "EclipseApi.hpp"
 #endif
 
 using namespace geode::prelude;
@@ -108,8 +108,9 @@ void versus::cursor::hideForPlay() {
 #endif
 }
 
+// Eclipse 설정 읽기 API 없이 빌드됐으면(EclipseApi.hpp) 알 수 없으므로 안내하지 않는다.
 bool versus::cursor::eclipseLocksCursor() {
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) && VERSUS_ECLIPSE_API
     return Loader::get()->isModLoaded("eclipse.eclipse-menu") &&
            eclipse::config::getInternal<bool>("global.lockcursor", false);
 #else

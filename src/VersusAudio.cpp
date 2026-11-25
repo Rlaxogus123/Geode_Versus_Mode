@@ -3,6 +3,8 @@
 // (직전과 같은 파일은 피함), 없으면 GD 내장 효과음으로 대체한다.
 // 음악은 FMOD 0번 채널에 Ranked/컵 음악을 틀어 두고, 라운지에서 맵 노래가 끼어들거나 끊기는 것을 감시한다.
 #include "VersusAudio.hpp"
+#include "GdCompat.hpp"
+#include "PathCompat.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/FMODAudioEngine.hpp>
@@ -84,10 +86,19 @@ std::string songPath(int song) {
     return std::string(music->pathForSong(song));
 }
 
+// FMODAudioEngine::setChannelVolume(id, MusicChannel, volume)와 같은 일 (GD 2.2091 맥 바인딩에 주소가 없다).
+// GD는 채널 볼륨을 기억해 두고, 재생 중인 채널에는 볼륨 × 볼륨 배율을 바로 적용한다.
+void setMusicChannelVolume(FMODAudioEngine* engine, int id, float volume) {
+    if (!engine) return;
+    engine->m_audioState.m_volumeForMusicChannels[id] = volume;
+    if (auto* channel = engine->getActiveMusicChannel(id))
+        channel->setVolume(volume * engine->m_audioState.m_volumeModForMusicChannels[id]);
+}
+
 // 지금 채널 0에서 재생 중인 음악이 우리가 튼 Ranked 음악인지.
 bool ownsRankedMusic(FMODAudioEngine* engine) {
     return engine && s_rankedMusicPlaying && !s_rankedMusicPath.empty() &&
-           engine->getActiveMusic(0) == gd::string(s_rankedMusicPath);
+           engine->getActiveMusic(0) == std::string(s_rankedMusicPath);
 }
 
 // 볼륨 값을 0~kRankedMusicMax로 제한한다 (유한하지 않은 값이면 기본 0.65).
@@ -117,7 +128,7 @@ std::vector<std::filesystem::path> variants(std::string_view base) {
     std::vector<std::filesystem::path> result;
     auto* mod = Mod::get();
     if (!mod) return result;
-    auto const root = mod->getResourcesDir();
+    auto const root = versus::stdPath(mod->getResourcesDir());
     std::array const folders{root / "sounds", root / "resources" / "sounds", root};
     std::error_code error;
     for (auto const& folder : folders) {
@@ -164,7 +175,7 @@ void playFile(std::string_view base, char const* fallback) {
     if (auto* engine = FMODAudioEngine::sharedEngine()) {
         auto path = randomVariant(base);
         if (!path.empty()) {
-            engine->playEffect(gd::string(path.string()));
+            engine->playEffect(std::string(path.string()));
             return;
         }
     }
@@ -208,15 +219,15 @@ void startResultMusic() {
     if (!engine) return;
     auto path = randomVariant("finbgm");
     if (path.empty()) return;
-    engine->stopMusic(kResultMusicChannel);
-    engine->playMusic(gd::string(path.string()), true, .18f, kResultMusicChannel);
+    versus::gd::stopMusic(engine, kResultMusicChannel);
+    engine->playMusic(std::string(path.string()), true, .18f, kResultMusicChannel);
     engine->resumeMusic(kResultMusicChannel);
     s_resultMusicPlaying = true;
 }
 
 void stopResultMusic() {
     if (!s_resultMusicPlaying) return;
-    if (auto* engine = FMODAudioEngine::sharedEngine()) engine->stopMusic(kResultMusicChannel);
+    if (auto* engine = FMODAudioEngine::sharedEngine()) versus::gd::stopMusic(engine, kResultMusicChannel);
     s_resultMusicPlaying = false;
 }
 
@@ -236,8 +247,8 @@ void startRankedMusic() {
                 break;
             }
         }
-        engine->playMusic(gd::string(s_rankedMusicPath), true, 0.f, 0);
-        engine->setChannelVolume(0, AudioTargetType::MusicChannel, rankedMusicVolume());
+        engine->playMusic(std::string(s_rankedMusicPath), true, 0.f, 0);
+        setMusicChannelVolume(engine, 0, rankedMusicVolume());
         engine->resumeMusic(0);
         s_rankedMusicPlaying = true;
     }
@@ -293,7 +304,7 @@ void endLevelSong() {
     bool const playing = engine && std::string(engine->getActiveMusic(0)) == s_levelSong;
     forgetWatched();
     if (!playing) return;
-    engine->stopMusic(0);
+    versus::gd::stopMusic(engine, 0);
     if (s_rankedMusicPlaying) {
         s_rankedMusicPlaying = false;
         s_rankedMusicPath.clear();
@@ -309,7 +320,7 @@ void restoreRankedMusic() {
     std::string const active(engine->getActiveMusic(0));
     log::info("Versus: Season 2 match found: {} stopped - the cup's music",
               active.empty() ? std::string("the music") : "the song " + fileName(active));
-    if (channelZero(engine) != Music::Stopped) engine->stopMusic(0);
+    if (channelZero(engine) != Music::Stopped) versus::gd::stopMusic(engine, 0);
     forgetWatched();
     s_rankedMusicPlaying = false;
     s_rankedMusicPath.clear();
@@ -325,8 +336,8 @@ void stopRankedMusic(bool returnToMenu) {
     if (ownsRankedMusic(engine) ||
         (engine && !s_levelSong.empty() && std::string(engine->getActiveMusic(0)) == s_levelSong)) {
         owned = true;
-        engine->setChannelVolume(0, AudioTargetType::MusicChannel, 1.f);
-        engine->stopMusic(0);
+        setMusicChannelVolume(engine, 0, 1.f);
+        versus::gd::stopMusic(engine, 0);
     }
     forgetWatched();
     s_rankedMusicPlaying = false;
@@ -436,7 +447,19 @@ void setRankedMusicVolume(float volume) {
     volume = safeVolume(volume);
     if (auto* mod = Mod::get()) mod->setSavedValue("ranked-music-volume", volume);
     if (auto* engine = FMODAudioEngine::sharedEngine(); ownsRankedMusic(engine))
-        engine->setChannelVolume(0, AudioTargetType::MusicChannel, volume);
+        setMusicChannelVolume(engine, 0, volume);
+}
+
+// GD 2.2091에서 resumeAllEffects가 없어졌고 resumeAllAudio는 맥(M1) 주소가 없다.
+// 둘이 하던 일(전체 일시정지 해제 + 효과음 채널 그룹 재개)을 직접 한다.
+void resumeGameAudio() {
+    auto* engine = FMODAudioEngine::sharedEngine();
+    if (!engine) return;
+    if (engine->m_allAudioPaused) {
+        engine->m_allAudioPaused = false;
+        if (engine->m_backgroundMusicChannel) engine->m_backgroundMusicChannel->setPaused(false);
+    }
+    if (engine->m_globalChannel) engine->m_globalChannel->setPaused(false);
 }
 
 }

@@ -3,16 +3,17 @@
 // 흔적을 합쳐 ExternalCheatStatus로 돌려준다. 플랫폼별(Windows/Android/macOS/iOS) 처리가
 // 섞여 있다.
 #include "ExternalCheatMonitor.hpp"
+#include "EclipseApi.hpp"
 #include "IntegrityCodes.hpp"
 #include "IntegrityFeatures.hpp"
 #include "MegaHackRules.hpp"
+#include "PathCompat.hpp"
 #include "PrismRules.hpp"
 #include "VersusService.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/utils/file.hpp>
-#include <eclipse.eclipse-menu/include/eclipse.hpp>
 
 #include <array>
 #include <chrono>
@@ -140,8 +141,12 @@ ExternalCheatStatus qolStatus() {
 
 // Eclipse 메뉴 설정을 읽어 판정한다. 불리언 기능 목록에 더해 Speedhack(배속 != 1),
 // bot 상태, 기본보다 느린 respawn delay를 추가로 확인한다.
+// 설정 읽기 API 없이 빌드됐으면(EclipseApi.hpp) 무엇이 켜졌는지 알 수 없으므로, Eclipse가 로드돼 있기만 해도
+// kEclipseUnchecked로 감지한다. 확인 못 한 Eclipse를 대결에 들이지 않으려는 것이다.
 ExternalCheatStatus eclipseStatus(bool includeAttemptHistory) {
+    (void)includeAttemptHistory;
     if (!Loader::get()->isModLoaded("eclipse.eclipse-menu")) return {};
+#if VERSUS_ECLIPSE_API
     auto detected = activeEclipseBooleanFeatures(
         [](std::string_view key) { return eclipse::config::getInternal<bool>(key, false); });
     bool const speedEnabled = eclipse::config::getInternal<bool>("global.speedhack.toggle", false);
@@ -154,9 +159,13 @@ ExternalCheatStatus eclipseStatus(bool includeAttemptHistory) {
     if (eclipse::config::getInternal<bool>("player.respawndelay.toggle", false) &&
         respawnSlowerThanDefault(eclipse::config::getInternal<double>("player.respawndelay", 1.)))
         detected.emplace_back("player.respawndelay.toggle");
-
-    (void)includeAttemptHistory;
     return statusFor(kEclipseEnabled, "Eclipse", detected);
+#else
+    static bool s_logged = false;
+    if (!std::exchange(s_logged, true))
+        log::warn("Versus: built without Eclipse's settings API; a loaded Eclipse counts as a banned feature");
+    return statusFor(kEclipseEnabled, "Eclipse", {std::string(kEclipseUnchecked)});
+#endif
 }
 
 ExternalCheatStatus megaHackProfileStatus(Mod* mod);
@@ -169,7 +178,7 @@ ExternalCheatStatus cachedMegaHackProfileStatus(Mod* mod) {
     static std::uintmax_t cachedSize = 0;
     static bool cachedValid = false;
     static ExternalCheatStatus cachedStatus;
-    auto const path = mod->getSaveDir() / "v9" / "hackpro.json";
+    auto const path = versus::stdPath(mod->getSaveDir() / "v9" / "hackpro.json");
     std::error_code timeError, sizeError;
     auto const time = std::filesystem::last_write_time(path, timeError);
     auto const size = std::filesystem::file_size(path, sizeError);
@@ -356,7 +365,7 @@ MegaHackRuntimeApi scanMegaHackApi() {
 // 그 외 플랫폼은 최초 한 번만 심볼을 스캔해서 결과를 캐시한다.
 MegaHackRuntimeApi megaHackRuntimeApi(Mod* mod) {
 #ifdef GEODE_IS_WINDOWS
-    auto const path = mod->getBinaryPath();
+    auto const path = versus::stdPath(mod->getBinaryPath());
     HMODULE module = GetModuleHandleW(path.c_str());
     if (!module) module = GetModuleHandleW(path.filename().c_str());
     if (!module) module = GetModuleHandleW(L"absolllute.megahack.dll");

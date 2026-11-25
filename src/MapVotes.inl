@@ -26,7 +26,8 @@ inline CCSprite* icon(char const* frame, float height) {
     auto const full = sprite->getContentSize();
     if (sprite->getTexture() && rect.size.width > 0.f && rect.size.height > 0.f &&
         (rect.size.width + .5f < full.width || rect.size.height + .5f < full.height)) {
-        if (auto* trimmed = CCSprite::createWithTexture(sprite->getTexture(), rect)) {
+        // 사각형을 받는 createWithTexture는 Apple Silicon macOS 2.2091 바인딩에 주소가 없어 텍스처만 넘기고 영역은 바로 아래에서 정한다.
+        if (auto* trimmed = CCSprite::createWithTexture(sprite->getTexture())) {
             trimmed->setTextureRect(rect, sprite->isTextureRectRotated(), rect.size);
             sprite = trimmed;
         }

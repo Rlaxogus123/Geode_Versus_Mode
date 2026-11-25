@@ -627,7 +627,7 @@ bool startLive(GJGameLevel* source, Controller::Outside view, std::string watchU
     snapshotBattleLevelStats(source->m_levelID.value());
     pauseBattleMods();
     controller.constructing = true;
-    auto* scene = PlayLayer::scene(copy, false, false);
+    auto* scene = PlayLayer::scene(copy, false);
     controller.constructing = false;
     if (!scene || !controller.play.lock()) {
         restoreBattleLevelStats();
@@ -927,7 +927,7 @@ bool start(GJGameLevel* source, std::string battleID, std::string watchUid, std:
     snapshotBattleLevelStats(source->m_levelID.value());
     pauseBattleMods();
     controller.constructing = true;
-    auto* scene = PlayLayer::scene(copy, false, false);
+    auto* scene = PlayLayer::scene(copy, false);
     controller.constructing = false;
     if (!scene || !controller.play.lock()) {
         restoreBattleLevelStats();
@@ -994,12 +994,12 @@ using versus::freeplay::Controller;
 // free play PlayLayer 후킹. 생성 중이면 컨트롤러에 연결하고, 클리어하면 테스트 모드로 처리해
 // 기록을 남기지 않으며 일정 시간 뒤 자동 재시작한다. 종료 화면은 띄우지 않는다.
 class $modify(VersusGroupFreePlayLayer, PlayLayer){
-    bool init(GJGameLevel * level, bool useReplay, bool dontCreateObjects){auto* controller = Controller::peek();
+    bool init(GJGameLevel* level, bool dontCreateObjects){auto* controller = Controller::peek();
 if (controller && controller->constructing) {
     versus::rebind(controller->play, static_cast<PlayLayer*>(this));
     versus::attachPausedMods(this);
 }
-return PlayLayer::init(level, useReplay, dontCreateObjects);
+return PlayLayer::init(level, dontCreateObjects);
 }
 void onEnterTransitionDidFinish() {
     PlayLayer::onEnterTransitionDidFinish();
