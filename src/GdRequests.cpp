@@ -1,7 +1,7 @@
 // GD 레벨 검색 / 다운로드 응답 라우터. Versus가 보낸 요청의 키를 기억해 두었다가, GD가 그 키의 응답을 처리할 때만
 // 델리게이트 자리를 요청한 쪽으로 잠깐 바꿔 응답을 넘기고 원래 주인에게 되돌린다. 다른 키의 응답은 손대지 않는다.
 #include "GdRequests.hpp"
-#include "GdCompat.hpp"
+#include "compat/Compat.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GameLevelManager.hpp>
 #include <Geode/binding/GJSearchObject.hpp>
@@ -88,7 +88,7 @@ bool search(GJSearchObject* object, LevelManagerDelegate* target) {
     auto* manager = GameLevelManager::sharedState();
     if (!manager || !object) return false;
     std::string const key = object->getKey();
-    if (versus::gd::levelRequestActive(manager, key.c_str())) return false;
+    if (versus::compat::levelRequestActive(manager, key.c_str())) return false;
     remember(key).manager = target;
     if (!manager->m_levelManagerDelegate) manager->m_levelManagerDelegate = target;
     // 저장된 결과로 곧바로 답하는 경우에도 요청한 쪽이 받도록 보내는 동안만 자리를 바꿔 둔다.
@@ -97,14 +97,14 @@ bool search(GJSearchObject* object, LevelManagerDelegate* target) {
         Swap swap(manager->m_levelManagerDelegate, target);
         manager->getOnlineLevels(object);
     }
-    if (!versus::gd::levelRequestActive(manager, key.c_str())) take(key);
+    if (!versus::compat::levelRequestActive(manager, key.c_str())) take(key);
     return true;
 }
 bool download(int levelID, LevelDownloadDelegate* target) {
     auto* manager = GameLevelManager::sharedState();
     if (!manager || levelID <= 0) return false;
     auto const key = downloadKey(levelID);
-    if (versus::gd::levelRequestActive(manager, key.c_str())) return false;
+    if (versus::compat::levelRequestActive(manager, key.c_str())) return false;
     remember(key).download = target;
     if (!manager->m_levelDownloadDelegate) manager->m_levelDownloadDelegate = target;
     {
@@ -112,7 +112,7 @@ bool download(int levelID, LevelDownloadDelegate* target) {
         Swap swap(manager->m_levelDownloadDelegate, target);
         manager->downloadLevel(levelID, false, 0);
     }
-    if (!versus::gd::levelRequestActive(manager, key.c_str())) take(key);
+    if (!versus::compat::levelRequestActive(manager, key.c_str())) take(key);
     return true;
 }
 void release(LevelManagerDelegate* target) {
@@ -146,27 +146,28 @@ void drop(std::string const& key) {
 }
 bool active(std::string const& key) {
     auto* manager = GameLevelManager::sharedState();
-    return manager && !key.empty() && versus::gd::levelRequestActive(manager, key.c_str());
+    return manager && !key.empty() && versus::compat::levelRequestActive(manager, key.c_str());
 }
 void forget(std::string const& key) {
     if (auto* manager = GameLevelManager::sharedState(); manager && !key.empty())
-        versus::gd::forgetLevelRequest(manager, key.c_str());
+        versus::compat::forgetLevelRequest(manager, key.c_str());
 }
 }
 
 // GD가 서버 응답을 종류별 처리로 나누는 곳(handleIt). 검색 / 레벨 다운로드 응답이 Versus가 보낸 키일 때만
 // 델리게이트를 요청한 쪽(버린 키면 nullptr)으로 바꿔 원래 처리를 그대로 돌리고, 끝나면 되돌린다.
-// 업데이트 확인(UpdateLevel)은 손대지 않는다. 2.2091 macOS/iOS 바인딩에는 응답별 처리 함수의 주소가 없어
-// 모든 플랫폼에 주소가 있는 handleIt에서 나눈다.
+// 업데이트 확인(UpdateLevel)은 손대지 않는다. GD 2.2091 macOS/iOS 바인딩에는 응답별 처리 함수의 주소가 없어
+// 두 GD 버전의 모든 플랫폼에 주소가 있는 handleIt에서 나눈다.
 class $modify(VersusGdRoutes, GameLevelManager) {
-    void handleIt(bool success, std::string response, std::string tag, GJHttpType type) {
+    void handleIt(bool success, versus::compat::String response, versus::compat::String tag, GJHttpType type) {
         bool const search = type == GJHttpType::GetOnlineLevels;
-        auto route = search || type == GJHttpType::DownloadLevel ? take(tag) : std::nullopt;
+        std::string const key(tag);
+        auto route = search || type == GJHttpType::DownloadLevel ? take(key) : std::nullopt;
         if (!route) {
             GameLevelManager::handleIt(success, std::move(response), std::move(tag), type);
             return;
         }
-        Delivering scope{tag};
+        Delivering scope{key};
         if (search) {
             Swap swap(m_levelManagerDelegate, route->manager);
             GameLevelManager::handleIt(success, std::move(response), std::move(tag), type);

@@ -3,6 +3,8 @@ name: Build and release
 # 태그(vX.Y.Z)를 push하면 이 저장소의 코드와 리소스(resources/)만으로 모든 플랫폼을 빌드해 GitHub Release에 올린다.
 # 다른 저장소나 비밀 값(secrets)은 쓰지 않는다. 쓰는 토큰은 GitHub가 실행마다 주는 github.token(릴리스 업로드)뿐이다.
 # 태그에 '-'가 있으면(예: v1.0.6-test1) 테스트용 프리릴리스로 올라가고, 게임 업데이트에는 쓰이지 않는다.
+# GD 버전마다 패키지를 하나씩 만든다: GD 2.2081(Geode 5)용 tipp7.versus.geode, GD 2.2091(Geode 6)용
+# tipp7.versus-2.2091.geode. mod.json은 빌드마다 tools/geode_package.py modjson이 그 GD 버전용으로 바꾼다.
 
 on:
   push:
@@ -17,22 +19,29 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Geode CLI 버전 고정(Geode 6 SDK는 v4.0.1 이상이 필요하다, 2026-11-25 최신 릴리스). 빌드 액션도 아래에서 커밋으로
-  # 고정한다(main, 2026-11-23). 둘 중 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는 보장이 없어진다.
-  GEODE_CLI: v4.0.2
+  # GD 버전별 빌드 도구. GD 2.2081은 v1.0.x 릴리스와 같은 빌드 액션(main, 2026-11-03), Geode CLI, 바인딩 커밋으로,
+  # GD 2.2091은 Geode 6 SDK에 맞는 것(Geode CLI v4.0.1 이상, 빌드 액션 main 2026-11-23, 바인딩 main 2026-11-25)으로
+  # 빌드한다. 액션은 아래 uses에서 커밋으로 고정한다. 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는
+  # 보장이 없어진다.
+  CLI_2081: v4.0.0
+  CLI_2091: v4.0.2
+  BINDINGS_2081: 7f6c2a75742856de88dad354e576dcff8a28e881
+  # 2.2091 바인딩은 iOS / macOS 주소가 계속 채워지는 중이라, 올릴 때는 src/compat/gd2091의 플랫폼 분기와 함께 확인한다.
+  BINDINGS_2091: 975068022f6164c483907274909ad2f700c6d646
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
+        gd: ["2.2081", "2.2091"]
         config:
           - { name: Windows, os: windows-latest, target: Win64 }
           - { name: macOS, os: macos-latest, target: MacOS, args: '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"' }
           - { name: iOS, os: macos-latest, target: iOS }
           - { name: Android32, os: ubuntu-latest, target: Android32 }
           - { name: Android64, os: ubuntu-latest, target: Android64 }
-    name: ${{ matrix.config.name }}
+    name: ${{ matrix.gd }} ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
     steps:
       - uses: actions/checkout@v5
@@ -57,6 +66,10 @@ jobs:
             echo "resources/$folder: $count"
             if [ "$count" -eq 0 ]; then echo "resources/$folder is empty"; exit 1; fi
           done
+
+      - name: mod.json for GD ${{ matrix.gd }}
+        shell: bash
+        run: python3 tools/geode_package.py modjson "${{ matrix.gd }}"
 
       - name: Use Visual Studio's Clang
         if: runner.os == 'Windows'
@@ -85,17 +98,35 @@ jobs:
           cmake --version | sed -n 1p || true
           if [ "$RUNNER_OS" = "macOS" ]; then xcodebuild -version | sed -n 1p || true; fi
 
-      - name: Build
+      # 코드 생성기(Codegen)도 고정한 바인딩 커밋에서 직접 빌드한다 (미리 빌드된 최신본은 형식이 다름).
+      # GD 2.2081 빌드는 Eclipse 설정을 읽을 수 있어야 한다(VERSUS_REQUIRE_ECLIPSE_API, CMakeLists.txt 참고).
+      - name: Build (GD 2.2081, Geode 5)
+        id: build2081
+        if: matrix.gd == '2.2081'
+        uses: geode-sdk/build-geode-mod@61a56c697aea9655e3f31c6c1b83870431f30434
+        with:
+          cli: ${{ env.CLI_2081 }}
+          target: ${{ matrix.config.target }}
+          configure-args: -DSKIP_BUILDING_CODEGEN=OFF -DVERSUS_REQUIRE_ECLIPSE_API=ON ${{ matrix.config.args }}
+          bindings-ref: ${{ env.BINDINGS_2081 }}
+
+      - name: Build (GD 2.2091, Geode 6)
+        id: build2091
+        if: matrix.gd == '2.2091'
         uses: geode-sdk/build-geode-mod@dce36b35e1c3d9d8af92347760b12eba3caf4004
         with:
-          combine: true
-          cli: ${{ env.GEODE_CLI }}
+          cli: ${{ env.CLI_2091 }}
           target: ${{ matrix.config.target }}
-          # 코드 생성기(Codegen)도 고정한 바인딩 커밋에서 직접 빌드한다 (미리 빌드된 최신본은 형식이 다름).
           configure-args: -DSKIP_BUILDING_CODEGEN=OFF ${{ matrix.config.args }}
-          # GD 2.2091 바인딩 커밋으로 고정한다 (main, 2026-11-25). iOS / macOS 주소가 계속 채워지는 중이라
-          # 올릴 때는 src/GdCompat.hpp의 플랫폼 분기와 함께 확인한다.
-          bindings-ref: 975068022f6164c483907274909ad2f700c6d646
+          bindings-ref: ${{ env.BINDINGS_2091 }}
+
+      - name: Keep the package
+        uses: actions/upload-artifact@v7
+        with:
+          name: versus-${{ matrix.gd }}-${{ matrix.config.target }}
+          path: ${{ steps.build2081.outputs.build-output || steps.build2091.outputs.build-output }}/tipp7.versus.geode
+          if-no-files-found: error
+          retention-days: 3
 
   release:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Reproduce' || 'Release' }}
@@ -108,18 +139,38 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Combine the platforms
-        id: combine
-        uses: geode-sdk/build-geode-mod/combine@dce36b35e1c3d9d8af92347760b12eba3caf4004
+      - uses: actions/download-artifact@v8
         with:
-          cli: ${{ env.GEODE_CLI }}
-          # 재현 확인 도구(tools/geode_package.py)가 deflate 묶음을 기준으로 하므로 v1.0.5부터와 같이 deflate.
-          zstd: false
-          optimize-pngs: true
+          pattern: versus-*
+          path: artifacts
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Combine the platforms
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GD 버전마다 그 빌드와 같은 Geode CLI로 다섯 플랫폼을 한 패키지로 합친다. 순서와 옵션은 빌드 액션의
+          # combine과 같다(Windows에 나머지를 합침, PNG 다시 압축, zstd 끔: 재현 확인 도구가 deflate 묶음을 기준으로 한다).
+          for gd in 2.2081 2.2091; do
+            case "$gd" in 2.2081) cli="$CLI_2081" ;; 2.2091) cli="$CLI_2091" ;; esac
+            mkdir -p "cli-$gd" "merged/$gd"
+            gh release download "$cli" --repo geode-sdk/cli -p '*-linux.zip' -D "cli-$gd"
+            unzip -q -o "cli-$gd"/*-linux.zip -d "cli-$gd"
+            chmod +x "cli-$gd/geode"
+            parts=()
+            for target in Win64 MacOS Android32 Android64 iOS; do
+              part="artifacts/versus-$gd-$target/tipp7.versus.geode"
+              test -f "$part" || { echo "missing $part"; exit 1; }
+              parts+=("$part")
+            done
+            "cli-$gd/geode" package merge --optimize-pngs "${parts[@]}"
+            cp "${parts[0]}" "merged/$gd/tipp7.versus.geode"
+          done
 
       - name: Package reproducibly and check it against the repository
         shell: bash
@@ -129,11 +180,13 @@ jobs:
           mkdir release
           # 항목 이름순, 시각은 태그 커밋 시각, deflate 9: 같은 내용이면 같은 파일.
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-          python tools/geode_package.py normalize \
-            "${{ steps.combine.outputs.build-output }}/tipp7.versus.geode" release/tipp7.versus.geode
-          # 바이너리 5개를 뺀 모든 항목이 이 저장소의 파일과 같은지(PNG는 픽셀, 텍스트는 내용).
+          python tools/geode_package.py normalize merged/2.2081/tipp7.versus.geode release/tipp7.versus.geode
+          python tools/geode_package.py normalize merged/2.2091/tipp7.versus.geode release/tipp7.versus-2.2091.geode
+          # 바이너리 5개를 뺀 모든 항목이 이 저장소의 파일과 같은지(PNG는 픽셀, 텍스트는 내용, mod.json은 그 GD 버전용).
           python tools/geode_package.py check release/tipp7.versus.geode
+          python tools/geode_package.py check release/tipp7.versus-2.2091.geode
           python tools/geode_package.py list release/tipp7.versus.geode > release/contents.sha256
+          python tools/geode_package.py list release/tipp7.versus-2.2091.geode > release/contents-2.2091.sha256
 
       - name: Compare with the published release
         if: github.event_name == 'workflow_dispatch'
@@ -142,9 +195,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" -p tipp7.versus.geode -D published
-          if python tools/geode_package.py compare published/tipp7.versus.geode release/tipp7.versus.geode | tee compare.txt; then
-            result="Reproduced: the rebuild of $GITHUB_REF_NAME is byte-for-byte the published tipp7.versus.geode"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            -p tipp7.versus.geode -p tipp7.versus-2.2091.geode -D published
+          ok=1
+          : > compare.txt
+          for file in tipp7.versus.geode tipp7.versus-2.2091.geode; do
+            python tools/geode_package.py compare "published/$file" "release/$file" | tee -a compare.txt || ok=0
+          done
+          if [ "$ok" = 1 ]; then
+            result="Reproduced: the rebuild of $GITHUB_REF_NAME is byte-for-byte both published packages"
           else
             result="NOT reproduced: see the entries that differ"
           fi
@@ -161,54 +220,76 @@ jobs:
           python3 - "$version" <<'PY'
           import hashlib, json, os, sys, zipfile
           version = sys.argv[1].lstrip("v")
-          path = "release/tipp7.versus.geode"
-          data = open(path, "rb").read()
-          with zipfile.ZipFile(path) as package:
-              names = package.namelist()
-              meta = json.loads(package.read("mod.json"))
-              mac = package.read("tipp7.versus.dylib")
-          assert meta["id"] == "tipp7.versus", meta["id"]
-          assert meta["version"].lstrip("v") == version, meta["version"]
-          for binary in ("tipp7.versus.dll", "tipp7.versus.dylib", "tipp7.versus.ios.dylib",
-                         "tipp7.versus.android32.so", "tipp7.versus.android64.so"):
-              assert binary in names, f"missing {binary}"
-          # macOS 바이너리는 Intel·Apple Silicon 공용(universal, FAT 헤더)이어야 한다.
-          assert mac[:4] == bytes.fromhex("cafebabe"), "macOS binary is not universal"
           repo = os.environ["GITHUB_REPOSITORY"]
           tag = os.environ["GITHUB_REF_NAME"]
+          # GD 버전 -> 패키지 파일. GD 2.2081용은 예전 이름 그대로다(1.1.0 전의 업데이터가 그 이름만 받는다).
+          files = {"2.2081": "tipp7.versus.geode", "2.2091": "tipp7.versus-2.2091.geode"}
+          packages = {}
+          for gd, name in files.items():
+              path = f"release/{name}"
+              data = open(path, "rb").read()
+              with zipfile.ZipFile(path) as package:
+                  names = package.namelist()
+                  meta = json.loads(package.read("mod.json"))
+                  mac = package.read("tipp7.versus.dylib")
+              assert meta["id"] == "tipp7.versus", meta["id"]
+              assert meta["version"].lstrip("v") == version, meta["version"]
+              assert all(meta["gd"][p] == gd for p in ("win", "android", "mac", "ios")), (name, meta["gd"])
+              for binary in ("tipp7.versus.dll", "tipp7.versus.dylib", "tipp7.versus.ios.dylib",
+                             "tipp7.versus.android32.so", "tipp7.versus.android64.so"):
+                  assert binary in names, f"{name}: missing {binary}"
+              # macOS 바이너리는 Intel·Apple Silicon 공용(universal, FAT 헤더)이어야 한다.
+              assert mac[:4] == bytes.fromhex("cafebabe"), f"{name}: macOS binary is not universal"
+              packages[gd] = {
+                  "url": f"https://github.com/{repo}/releases/download/{tag}/{name}",
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "size": len(data),
+              }
+          # 맨 위의 url / sha256 / size는 GD 2.2081 패키지: 1.1.0 전의 업데이터는 이것만 읽는다.
+          # 1.1.0부터의 업데이터는 packages에서 자기 GD 버전의 패키지를 고른다.
           manifest = {
               "schema": 1,
               "modId": "tipp7.versus",
               "channel": "public",
               "version": version,
-              "url": f"https://github.com/{repo}/releases/download/{tag}/tipp7.versus.geode",
-              "sha256": hashlib.sha256(data).hexdigest(),
-              "size": len(data),
+              **packages["2.2081"],
               "mandatory": True,
+              "packages": packages,
           }
           json.dump(manifest, open("release/manifest.json", "w"), indent=2)
-          # 릴리스 노트: changelog.md 맨 위 버전 항목 + 확인 방법
+          # 릴리스 노트: changelog.md 맨 위 버전 항목 + 받을 파일 + 확인 방법
           text = open("changelog.md", encoding="utf-8").read()
           section = "## v" + text.split("\n## v")[1].split("\n## ")[0] if "\n## v" in text else ""
+          which = (
+              "### Which file\n"
+              f"- Geometry Dash 2.2081 (Geode 5): `{files['2.2081']}`. Versus updates itself to this one.\n"
+              f"- Geometry Dash 2.2091 (Geode 6): `{files['2.2091']}`. Install it with Geode's install-from-file button "
+              "(it replaces the old Versus; if you copy it into Geode's `mods` folder yourself, delete `tipp7.versus.geode` "
+              "there), and install the Argon mod when Geode asks for it. After that, Versus updates itself.\n"
+          )
           verify = (
               "### Verify this release\n"
               f"- Built by this repository's workflow from tag `{tag}` only (no other repository, no secrets).\n"
-              f"- Provenance: `gh attestation verify tipp7.versus.geode --repo {repo}`\n"
-              "- Contents: `python3 tools/geode_package.py check tipp7.versus.geode` (everything but the five "
-              "binaries is the repository's own files); per-file SHA-256 in `contents.sha256`.\n"
+              f"- Provenance: `gh attestation verify <file> --repo {repo}`\n"
+              "- Contents: `python3 tools/geode_package.py check <file>` (everything but the five binaries is the "
+              "repository's own files, with mod.json set for that GD version); per-file SHA-256 in "
+              "`contents.sha256` (2.2081) and `contents-2.2091.sha256`.\n"
               "- Rebuild: run the workflow on this tag (Actions > Build and release > Run workflow); it rebuilds "
-              "and compares byte for byte.\n"
+              "both packages and compares them byte for byte.\n"
           )
+          sums = "".join(f"- `{files[gd]}`: `{packages[gd]['sha256']}`\n" for gd in files)
           open("release/notes.md", "w", encoding="utf-8").write(
-              section.strip() + "\n\n" + verify + f"\nSHA-256: `{manifest['sha256']}`\n")
+              section.strip() + "\n\n" + which + "\n" + verify + "\nSHA-256:\n" + sums)
           print(json.dumps(manifest, indent=2))
           PY
 
-      - name: Attest the package
+      - name: Attest the packages
         if: github.event_name == 'push'
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: release/tipp7.versus.geode
+          subject-path: |
+            release/tipp7.versus.geode
+            release/tipp7.versus-2.2091.geode
 
       - name: Publish
         if: github.event_name == 'push'
@@ -219,7 +300,7 @@ jobs:
           set -euo pipefail
           extra=""
           case "$GITHUB_REF_NAME" in *-*) extra="--prerelease" ;; *) extra="--latest" ;; esac
-          gh release create "$GITHUB_REF_NAME" release/tipp7.versus.geode release/manifest.json \
-            release/contents.sha256 \
+          gh release create "$GITHUB_REF_NAME" release/tipp7.versus.geode release/tipp7.versus-2.2091.geode \
+            release/manifest.json release/contents.sha256 release/contents-2.2091.sha256 \
             --repo "$GITHUB_REPOSITORY" --title "Versus ${GITHUB_REF_NAME#v}" \
             --notes-file release/notes.md $extra

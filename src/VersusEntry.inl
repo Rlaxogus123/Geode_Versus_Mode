@@ -127,7 +127,7 @@ class MembershipCodePopup final : public ::versus::DeferredPopup {
     TextInput* m_input = nullptr;
     CCLabelBMFont* m_message = nullptr;
     void onExit() override {
-        if (m_input) m_input->unfocus();
+        compat::unfocus(m_input);
         Popup::onExit();
     }
 
@@ -146,7 +146,7 @@ class MembershipCodePopup final : public ::versus::DeferredPopup {
     // 입력한 코드로 멤버십 활성화를 서버에 요청한다. 결과 메시지를 팝업 안에 보여 준다.
     void submit(CCObject*) {
         if (m_busy) return;
-        m_input->unfocus();
+        compat::unfocus(m_input);
         auto code = std::string(m_input->getString());
         if (code.empty()) {
             m_message->setString("Enter your membership code.");

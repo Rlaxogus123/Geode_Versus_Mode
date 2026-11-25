@@ -5,17 +5,17 @@
 #include "Season2Lounge.hpp"
 #include "Season2LoungeLevel.hpp"
 #include "BattleLevelData.hpp"
-#include "GdCompat.hpp"
 #include "GdRequests.hpp"
 #include "GroupFreePlay.hpp"
 #include "MapCache.hpp"
 #include "MatchLaunch.hpp"
-#include "PathCompat.hpp"
 #include "Replay.hpp"
 #include "SpriteFrames.hpp"
 #include "VersusAudio.hpp"
 #include "VersusService.hpp"
 #include "WeakRefs.hpp"
+#include "compat/Compat.hpp"
+#include "compat/GameHooks.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/ColorAction.hpp>
@@ -184,7 +184,7 @@ class LoungeMap final : public CCNode, public LevelManagerDelegate, public Level
         std::vector<int> sfx, songs;
     };
     mutable std::optional<Kept> m_keptInfo;
-    std::filesystem::path cachePath() const { return versus::stdPath(Mod::get()->getSaveDir() / m_cacheFile); }
+    std::filesystem::path cachePath() const { return versus::compat::stdPath(Mod::get()->getSaveDir() / m_cacheFile); }
     Kept const& keptInfo() const {
         if (!m_keptInfo) m_keptInfo = readKept();
         return *m_keptInfo;
@@ -309,7 +309,7 @@ public:
         if (m_searchPending && key && m_key == key) m_searchDone = true;
     }
     void loadLevelsFailed(char const* key, int) override { loadLevelsFailed(key); }
-    void setupPageInfo(std::string, char const*) override {}
+    void setupPageInfo(versus::compat::String, char const*) override {}
     void levelDownloadFinished(GJGameLevel* level) override {
         if (!level || level->m_levelID.value() != m_levelID) return;
         if (!m_wasSaved) versus::dropFromSaved(m_levelID, level);
@@ -366,7 +366,7 @@ public:
             if (m_searchPending) return;
             m_search = GJSearchObject::create(SearchType::Search, std::string(std::to_string(m_levelID)));
             m_key = m_search->getKey();
-            versus::gd::resetRequestTimer(manager, m_key.c_str());
+            versus::compat::resetRequestTimer(manager, m_key.c_str());
             if (versus::gdnet::active(m_key)) return;
             m_searchPending = true;
             if (!versus::gdnet::search(m_search, this)) m_searchPending = false;
@@ -483,7 +483,7 @@ public:
         auto* music = MusicDownloadManager::sharedState();
         if (!music) return;
         if (!m_watching) {
-            versus::gd::loadAudioLibraries(music);
+            versus::compat::loadAudioLibraries(music);
             music->addMusicDownloadDelegate(this);
             m_watching = true;
         }
@@ -545,7 +545,7 @@ std::string levelData(std::string_view cup) {
         return s_editorMap;
     }
     if (auto* mod = Mod::get()) {
-        if (auto text = readFile(versus::stdPath(mod->getSaveDir() / "season2-lounge.txt")); !trimmed(text).empty()) {
+        if (auto text = readFile(versus::compat::stdPath(mod->getSaveDir() / "season2-lounge.txt")); !trimmed(text).empty()) {
             if (auto decoded = platformerData(std::move(text)); !decoded.empty()) {
                 log::info("Versus: the Season 2 lounge uses season2-lounge.txt");
                 return decoded;
@@ -870,7 +870,7 @@ class Host final : public CCLayer {
         level->m_gameVersion = kLoungeGameVersion;
         std::string const data = levelData(Service::get().rankedCup());
         m_levelSongs = triggerSongs(data);
-        level->m_levelString = ZipUtils::compressString(std::string(data), false, 6, 11);
+        level->m_levelString = versus::compat::compressLevelString(data);
         level->m_levelName = "Season 2 Lounge";
         level->m_levelType = GJLevelType::Saved;
         level->m_levelID = 0;
@@ -880,7 +880,7 @@ class Host final : public CCLayer {
         m_timeScale = CCDirector::sharedDirector()->getScheduler()->getTimeScale();
         pauseBattleMods();
         s_constructing = true;
-        auto* layer = PlayLayer::create(level, false);
+        auto* layer = versus::compat::createPlayLayer(level);
         s_constructing = false;
         if (!layer || layer != s_identity || !s_play.lock()) {
             log::warn("Versus: the Season 2 lounge could not be opened");
@@ -1082,7 +1082,7 @@ public:
         if (!m_mapChannels) {
             std::array<Channel, 2> own;
             for (int i = 0; i < 2; ++i)
-                if (auto* action = versus::gd::colorAction(effects, ids[i]))
+                if (auto* action = versus::compat::colorAction(effects, ids[i]))
                     own[i] = {action->m_color, action->m_blending,
                               std::isfinite(action->m_currentOpacity) ? std::clamp(action->m_currentOpacity, 0.f, 1.f)
                                                                       : 1.f};
@@ -1153,7 +1153,7 @@ public:
         if (std::exchange(m_spawnInStep, false)) spawnRoom(play);
     }
     void spawnRoom(PlayLayer* play) {
-        std::vector<int> remap;
+        versus::compat::Vector<int> remap;
         play->spawnGroup(kRoomGroup, false, 0., remap, 0, 0);
         log::info("Versus: Season 2 lounge: group {} spawned (a match's room)", kRoomGroup);
     }
@@ -1414,7 +1414,7 @@ bool mapReady() {
 int mapLevel(std::string_view cup) {
     if (!s_editorMap.empty()) return 0;
     if (auto* mod = Mod::get())
-        if (auto text = readFile(versus::stdPath(mod->getSaveDir() / "season2-lounge.txt"));
+        if (auto text = readFile(versus::compat::stdPath(mod->getSaveDir() / "season2-lounge.txt"));
             !trimmed(text).empty() && !platformerData(std::move(text)).empty())
             return 0;
     if (LoungeMap::of(cup).hasKept()) return LoungeMap::of(cup).levelID();
@@ -1561,14 +1561,14 @@ namespace lounge = versus::lounge;
 class $modify(VersusLoungePlayLayer, PlayLayer){
     static void onModify(auto& self){(void)self.setHookPriorityPre("PlayLayer::init", Priority::First);
 }
-bool init(GJGameLevel* level, bool dontCreateObjects) {
+bool init(VERSUS_PLAY_INIT_PARAMS) {
     if (lounge::s_constructing) {
         lounge::bind(this);
         versus::attachPausedMods(this);
     } else {
         lounge::yieldTo(false);
     }
-    return PlayLayer::init(level, dontCreateObjects);
+    return PlayLayer::init(VERSUS_PLAY_INIT_ARGS);
 }
 void setupHasCompleted() {
     if (!owns(this)) {
@@ -1593,13 +1593,6 @@ void resetLevel() {
 void startMusic() {
     if (!owns(this)) PlayLayer::startMusic();
 }
-// Apple Silicon macOS 2.2091 바인딩에는 prepareMusic 주소가 없다. 그때도 lounge를 만드는 동안의 음악 로드와 재생 위치 변경은
-// 아래 FMOD 훅이 막고, 그 뒤의 음악 시작은 startMusic 훅이 막는다.
-#ifndef GEODE_IS_ARM_MAC
-void prepareMusic(bool dontWait) {
-    if (!owns(this)) PlayLayer::prepareMusic(dontWait);
-}
-#endif
 void pauseGame(bool unfocused) {
     if (!owns(this)) PlayLayer::pauseGame(unfocused);
 }
@@ -1618,7 +1611,7 @@ void destroyPlayer(PlayerObject* player, GameObject* object) {
         return;
     }
     if (object != m_anticheatSpike) return;
-    versus::gd::AutoRetryScope retry;
+    versus::compat::AutoRetryScope retry;
     PlayLayer::destroyPlayer(player, object);
 }
 void levelComplete() {
@@ -1651,15 +1644,10 @@ void processCommands(float dt, bool isHalfTick, bool isLastTick) {
 }
 ;
 
-// UILayer 훅: 터치가 허용될 때만 받고, 키 바인드 액션(점프, 일시 정지 등)은 누를 때 무시하며,
-// 뒤로 가기는 호스트 콜백으로 넘긴다. lounge 이동 키는 위의 키보드 이벤트가 따로 받는다.
+// UILayer 훅: 터치가 허용될 때만 받고, 뒤로 가기는 호스트 콜백으로 넘긴다.
 class $modify(VersusLoungeUILayer, UILayer){
     bool ccTouchBegan(CCTouch * touch, CCEvent* event){if (owns(m_gameLayer) && !lounge::touchOpen(touch)) return false;
 return UILayer::ccTouchBegan(touch, event);
-}
-bool handleAction(int action, bool down, double timestamp) {
-    if (down && owns(m_gameLayer)) return true;
-    return UILayer::handleAction(action, down, timestamp);
 }
 void keyBackClicked() {
     if (owns(m_gameLayer)) {
@@ -1671,9 +1659,16 @@ void keyBackClicked() {
 }
 ;
 
-// FMOD 훅: lounge 레벨을 만드는 중에는 GD가 음악을 로드하거나 재생 위치를 옮기지 않게 막는다 (랭크 음악 유지).
+// lounge의 GD 키 입력(점프, 일시 정지 등)은 누를 때 무시한다. lounge 이동 키는 위의 키보드 이벤트가 따로 받는다.
+// 키 입력 훅은 GD 버전마다 달라 compat/gd2081, compat/gd2091의 GameHooks.cpp에 있다.
+bool versus::hooks::loungeKey(UILayer* ui, Key, bool down) {
+    return down && versus::lounge::owns(ui->m_gameLayer);
+}
+
+// FMOD 훅: lounge 레벨을 만드는 중(setupHasCompleted 포함)에는 GD가 음악을 로드하거나 재생 위치를 옮기지 않게 막는다
+// (랭크 음악 유지). GD의 음악 준비(prepareMusic)가 하는 일이 이 둘이고, 그 뒤의 음악 시작은 startMusic 훅이 막는다.
 class $modify(VersusLoungeAudio, FMODAudioEngine){
-    void loadMusic(std::string path, float speed, float unknown, float volume, bool shouldLoop, int musicID,
+    void loadMusic(versus::compat::String path, float speed, float unknown, float volume, bool shouldLoop, int musicID,
                    int channelID, bool dontReset){if (lounge::s_constructing || lounge::s_inSetup) return;
 FMODAudioEngine::loadMusic(path, speed, unknown, volume, shouldLoop, musicID, channelID, dontReset);
 }

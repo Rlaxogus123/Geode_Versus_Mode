@@ -4,7 +4,7 @@
 // 또한 일시 정지 예산, 안티치트 실격, 워치독(멈춤 복구), 리롤 투표, 배속 처리를 담당한다.
 #include "ExecutionEffects.hpp"
 #include "BattleSession.hpp"
-#include "GdCompat.hpp"
+#include "compat/Compat.hpp"
 #include "Particles.hpp"
 #include "BattleProgress.hpp"
 #include "IntegrityMonitor.hpp"
@@ -2221,7 +2221,7 @@ public:
             sprite->onEnter();
             revived = true;
         }
-        if (versus::gd::targetPaused(CCDirector::sharedDirector()->getScheduler(), sprite)) revived = true;
+        if (versus::compat::targetPaused(CCDirector::sharedDirector()->getScheduler(), sprite)) revived = true;
         resumeTree(sprite);
         return revived;
     }
@@ -2254,14 +2254,14 @@ public:
         }
         auto* scheduler = CCDirector::sharedDirector()->getScheduler();
         bool const menu = pauseLayerPresent(owner);
-        bool const halted = owner->m_isPaused || !owner->isRunning() || versus::gd::targetPaused(scheduler, owner);
+        bool const halted = owner->m_isPaused || !owner->isRunning() || versus::compat::targetPaused(scheduler, owner);
         if (halted && !menu) {
             haltClock += dt;
             if (haltClock >= 2.5f) {
                 haltClock = 0.f;
                 log::warn("[Versus watchdog] gameplay halted without a pause menu "
                           "(paused={}, running={}, scheduler-paused={}); resuming",
-                          owner->m_isPaused, owner->isRunning(), versus::gd::targetPaused(scheduler, owner));
+                          owner->m_isPaused, owner->isRunning(), versus::compat::targetPaused(scheduler, owner));
                 if (owner->m_isPaused) owner->resume();
                 if (!owner->isRunning()) owner->onEnter();
                 owner->resumeSchedulerAndActions();

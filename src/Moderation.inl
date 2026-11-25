@@ -166,7 +166,7 @@ class ReportPopup final : public ::versus::DeferredPopup {
     TextInput* m_detail = nullptr;
     CCLabelBMFont* m_status = nullptr;
     void onExit() override {
-        if (m_detail) m_detail->unfocus();
+        compat::unfocus(m_detail);
         Popup::onExit();
     }
 
@@ -214,7 +214,7 @@ class ReportPopup final : public ::versus::DeferredPopup {
     // 신고를 전송한다. 실패하면 메시지를 보여 주고 다시 시도하게 한다.
     void onSend(CCObject*) {
         if (m_busy || m_reason < 0) return;
-        m_detail->unfocus();
+        compat::unfocus(m_detail);
         m_busy = true;
         enabled(m_send, false);
         say("Sending...", kIce);
@@ -266,8 +266,8 @@ class BanEditPopup final : public ::versus::DeferredPopup {
     TextInput* m_reason = nullptr;
     CCMenuItemSpriteExtra* m_apply = nullptr;
     void onExit() override {
-        if (m_reason) m_reason->unfocus();
-        if (m_count) m_count->unfocus();
+        compat::unfocus(m_reason);
+        compat::unfocus(m_count);
         Popup::onExit();
     }
 
@@ -411,7 +411,7 @@ class BanEditPopup final : public ::versus::DeferredPopup {
     // 영향 범위(되돌릴 수 없음)를 확인창으로 보여 주고, 확인되면 send() 로 보낸다. 신고 금지는 바로 보낸다.
     void onApply(CCObject*) {
         if (m_busy) return;
-        m_reason->unfocus();
+        compat::unfocus(m_reason);
         if (reasonText().empty()) {
             say(m_report ? "Write the reason for the report ban." : "Write the reason for the ban.");
             return;
@@ -566,7 +566,7 @@ class BroadcastSendPopup final : public ::versus::DeferredPopup {
     std::string m_text;
     bool m_sending = false;
     void onExit() override {
-        if (m_input) m_input->unfocus();
+        compat::unfocus(m_input);
         Popup::onExit();
     }
     bool init() {
@@ -632,7 +632,7 @@ class BroadcastSendPopup final : public ::versus::DeferredPopup {
             Notification::create("The clipboard is empty", NotificationIcon::Warning)->show();
             return;
         }
-        m_input->unfocus();
+        compat::unfocus(m_input);
         m_input->setString("");
         m_text = std::move(text);
         refresh();
@@ -642,7 +642,7 @@ class BroadcastSendPopup final : public ::versus::DeferredPopup {
     void onSend(CCObject*) {
         auto const text = trimmed(m_text);
         if (m_sending || text.empty() || utf8Length(text) > kMax) return;
-        m_input->unfocus();
+        compat::unfocus(m_input);
         createQuickPopup("Send Broadcast?", "Every player will see this message now.", "Back", "Send",
                          [self = Weak<BroadcastSendPopup>(this), text](auto*, bool yes) {
                              auto owner = self.lock();
@@ -681,7 +681,7 @@ class ReportNotePopup final : public ::versus::DeferredPopup {
     TextInput* m_note = nullptr;
     std::function<void(std::string)> m_send;
     void onExit() override {
-        if (m_note) m_note->unfocus();
+        compat::unfocus(m_note);
         Popup::onExit();
     }
     bool init(std::string const& name, int reports, std::function<void(std::string)> send) {
@@ -706,7 +706,7 @@ class ReportNotePopup final : public ::versus::DeferredPopup {
         return true;
     }
     void onSend(CCObject*) {
-        m_note->unfocus();
+        compat::unfocus(m_note);
         auto send = std::move(m_send);
         std::string note(m_note->getString());
         onClose(nullptr);
@@ -1037,8 +1037,8 @@ class AdminRankedPopup final : public ::versus::DeferredPopup {
     TextInput* m_reason = nullptr;
     std::vector<CCMenuItemSpriteExtra*> m_actions;
     void onExit() override {
-        if (m_delta) m_delta->unfocus();
-        if (m_reason) m_reason->unfocus();
+        compat::unfocus(m_delta);
+        compat::unfocus(m_reason);
         Popup::onExit();
     }
     bool init(PlayerProfile profile) {
@@ -1150,8 +1150,8 @@ class AdminRankedPopup final : public ::versus::DeferredPopup {
     // 조정 요청을 보낸다. 처리 중에는 버튼을 막고, 성공하면 갱신된 기록으로 화면을 바꾼다.
     void apply(std::function<void(Service::AdminRankedCallback)> send, std::string done) {
         if (m_busy || !m_record) return;
-        if (m_delta) m_delta->unfocus();
-        m_reason->unfocus();
+        compat::unfocus(m_delta);
+        compat::unfocus(m_reason);
         busy(true);
         say("");
         send([self = Weak<AdminRankedPopup>(this), done = std::move(done)](std::optional<AdminRankedRecord> record,
@@ -1271,7 +1271,7 @@ class AppealDetailPopup final : public ::versus::DeferredPopup {
     std::vector<CCMenuItemSpriteExtra*> m_actions;
     bool m_busy = false;
     void onExit() override {
-        if (m_answer) m_answer->unfocus();
+        compat::unfocus(m_answer);
         Popup::onExit();
     }
     bool init(BanAppeal appeal, Service::AppealsCallback changed) {
@@ -1337,7 +1337,7 @@ class AppealDetailPopup final : public ::versus::DeferredPopup {
     // 신청에 답한다(accept 면 밴 해제). 성공하면 갱신된 신청 목록을 changed 콜백으로 넘기고 닫는다.
     void answer(bool accept) {
         if (m_busy || !m_answer) return;
-        m_answer->unfocus();
+        compat::unfocus(m_answer);
         m_busy = true;
         for (auto* item : m_actions) enabled(item, false);
         m_status->setString("Sending...");
@@ -1533,7 +1533,7 @@ class AdminPanelPopup final : public ::versus::DeferredPopup {
     std::vector<int> m_shown;
     CCLabelBMFont* m_found = nullptr;
     void onExit() override {
-        if (m_search) m_search->unfocus();
+        compat::unfocus(m_search);
         Popup::onExit();
     }
     // 검색용으로 소문자로 바꾼다.
@@ -1574,7 +1574,7 @@ class AdminPanelPopup final : public ::versus::DeferredPopup {
         m_search->setCommonFilter(CommonFilter::Any);
         m_search->setMaxCharCount(40);
         m_search->setScale(.6f);
-        m_search->setContentSize({220.f / .6f, m_search->getContentHeight()});
+        compat::setWidth(m_search, 220.f / .6f);
         m_search->setPosition({136.f, kSearchY});
         styleInput(m_search);
         m_search->setCallback([self = Weak<AdminPanelPopup>(this)](std::string const& text) {
@@ -1738,7 +1738,7 @@ class AdminPanelPopup final : public ::versus::DeferredPopup {
         if (m_search) {
             m_search->setVisible(banTab);
             m_search->setEnabled(banTab);
-            if (!banTab) m_search->unfocus();
+            if (!banTab) compat::unfocus(m_search);
         }
         m_shown.clear();
         if (banTab)

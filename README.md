@@ -5,14 +5,21 @@ It includes 1 vs 1 and Group rooms, Ranked, LIVE spectating, replays, cosmetics 
 
 ## Download
 
-Get `tipp7.versus.geode` from the **[latest release](https://github.com/Rlaxogus123/Geode_Versus_Mode/releases/latest)**
-and put it in Geometry Dash's Geode mods folder (`geode/mods`). One file works on Windows, macOS, iOS and Android.
+Get the file for your Geometry Dash version from the **[latest release](https://github.com/Rlaxogus123/Geode_Versus_Mode/releases/latest)**
+and put it in Geometry Dash's Geode mods folder (`geode/mods`). Each file works on Windows, macOS, iOS and Android.
+
+| Geometry Dash | Geode | File |
+|---|---|---|
+| 2.2081 | 5 | `tipp7.versus.geode` |
+| 2.2091 | 6 | `tipp7.versus-2.2091.geode` |
+
+On 2.2091 Versus also needs the Argon mod: install it from Geode's mod list when Geode says Versus is missing a dependency.
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `src/` | The mod that runs in the game (C++, Geode SDK) |
+| `src/` | The mod that runs in the game (C++, Geode SDK). The few parts that differ between GD 2.2081 and 2.2091 are in `src/compat/` |
 | `resources/` | Images (`art/`, `auras/`), sounds (`sounds/`) and third-party licenses (`licenses/`) |
 | `tools/geode_package.py` | Checks a release package against this repository, and writes it reproducibly |
 | `server/battle_rules.py` | The server's battle rules, as they run on the live server: how a progress report is checked, how the winner is decided, and how the game's anti-cheat detections are handled |
@@ -34,16 +41,19 @@ and cannot be withdrawn.
 Every release is built by this repository's GitHub Actions workflow (`.github/workflows/build.yml`) from the tagged
 commit only: no other repository, no secrets (the only token is the one GitHub gives each run to upload the release).
 
-- **Provenance:** each `tipp7.versus.geode` has a GitHub build attestation:
-  `gh attestation verify tipp7.versus.geode --repo Rlaxogus123/Geode_Versus_Mode`
+- **Provenance:** each package has a GitHub build attestation:
+  `gh attestation verify tipp7.versus.geode --repo Rlaxogus123/Geode_Versus_Mode` (or `tipp7.versus-2.2091.geode`)
   shows the workflow run and the commit that produced exactly that file.
 - **Contents:** `python3 tools/geode_package.py check tipp7.versus.geode` (needs Pillow) checks that every file in
   the package other than the five binaries is this repository's own file (`mod.json`, `about.md`, `changelog.md`,
-  `logo.png`, `resources/`). PNGs are compared by pixels and text by content, because Geode's packer recompresses
-  PNGs and the Windows build writes text with CRLF. Each release also lists every file's SHA-256 (`contents.sha256`).
+  `logo.png`, `resources/`). `mod.json` is compared with this repository's `mod.json` set for the package's GD version
+  (`tools/geode_package.py modjson` changes only the Geode version, the GD version and, for 2.2091, the Argon
+  dependency). PNGs are compared by pixels and text by content, because Geode's packer recompresses PNGs and the
+  Windows build writes text with CRLF. Each release also lists every file's SHA-256 (`contents.sha256` for 2.2081,
+  `contents-2.2091.sha256` for 2.2091).
 - **Rebuild:** the build is set up to be reproducible. Running the workflow on a release tag (Actions > Build and release >
-  Run workflow, "Use workflow from" the tag) builds it again and compares the result with the published file byte for
-  byte. The build action and the Geode CLI are pinned, the package is written in a fixed order with fixed times
+  Run workflow, "Use workflow from" the tag) builds both packages again and compares them with the published files byte
+  for byte. The build actions and the Geode CLI are pinned, the packages are written in a fixed order with fixed times
   (`tools/geode_package.py normalize`), and the Windows DLL is linked with `/Brepro` (no link time in it).
 
 Up to v1.0.5 the images and sounds came from a separate private repository during the build. They are the files in

@@ -63,8 +63,8 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
         item->setSprite(sprite);
     }
     void onExit() override {
-        if (m_livesInput) m_livesInput->unfocus();
-        if (m_maxInput) m_maxInput->unfocus();
+        compat::unfocus(m_livesInput);
+        compat::unfocus(m_maxInput);
         Popup::onExit();
     }
     // 요청 중 / 자동 생명 / 연습 여부에 따라 버튼과 입력창의 활성 상태를 정한다.
@@ -153,7 +153,7 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
             if (typed >= 1 && typed <= 100) m_target = typed;
         } else if (!unlimited() && !m_autoLives && typed >= 1 && typed <= 99)
             m_attempts = typed;
-        m_livesInput->unfocus();
+        compat::unfocus(m_livesInput);
     }
     // 자동 생명 토글. 켜기 전에 방의 현재 레벨 정보를 다시 읽는다.
     void onAuto(CCObject*) {
@@ -256,8 +256,8 @@ class GroupRulesPopup final : public ::versus::DeferredPopup {
             return;
         }
         m_max = size;
-        m_livesInput->unfocus();
-        m_maxInput->unfocus();
+        compat::unfocus(m_livesInput);
+        compat::unfocus(m_maxInput);
         m_pending = true;
         refresh();
         Service::get().configureGroup(m_attempts, m_max, m_speed, m_autoLives, m_mode, m_mode != 2 && m_practice,
@@ -1052,7 +1052,7 @@ class GroupRoomLayer : public SceneLayer {
 
     // 나갈 때 검색창 포커스를 푼다.
     void onExit() override {
-        if (m_search) m_search->unfocus();
+        compat::unfocus(m_search);
         SceneLayer::onExit();
     }
     static void fit(CCMenuItemSpriteExtra* item, float width) {
@@ -1958,7 +1958,7 @@ class GroupRoomLayer : public SceneLayer {
         if (m_pending || m_transitioning || Service::get().busy() || !room || !host() || room->running() ||
             groupDrawing(*room))
             return;
-        m_search->unfocus();
+        compat::unfocus(m_search);
         if (auto const& view = Service::get().room())
             if (auto* popup = MapSelectionPopup::create(*view)) popup->show();
     }
@@ -2018,7 +2018,7 @@ class GroupRoomLayer : public SceneLayer {
         if (control.action == ReadyAction::None) return;
         if (control.action == ReadyAction::ChooseMap) {
             if (room->mapPool) {
-                m_search->unfocus();
+                compat::unfocus(m_search);
                 mappool::addMap();
             } else
                 onChoose(nullptr);
@@ -2132,7 +2132,7 @@ class GroupRoomLayer : public SceneLayer {
         if (m_pending || m_transitioning || Service::get().busy()) return;
         m_pending = true;
         enabled(m_back, false);
-        m_search->unfocus();
+        compat::unfocus(m_search);
         Service::get().leaveRoom([self = Weak<GroupRoomLayer>(this)](bool, std::string) {
             auto owner = self.lock();
             if (!owner) return;
@@ -2183,7 +2183,7 @@ public:
         }
         if (room->running() && room->battle->releasedAt == 0 && playingNow(*room) && !m_pending &&
             !isMatchLaunchActive() && sceneRunning()) {
-            m_search->unfocus();
+            compat::unfocus(m_search);
             m_transitioning = true;
             launchMatch();
             return;

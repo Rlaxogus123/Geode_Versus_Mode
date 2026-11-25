@@ -20,9 +20,15 @@ inline constexpr char RELEASES[] = "https://github.com/Rlaxogus123/Geode_Versus_
 inline std::string manifestUrl() {
     return std::string(RELEASES) + "/latest/download/manifest.json";
 }
-// 버전 X.Y.Z 릴리스의 통합 패키지 주소.
-inline std::string packageUrl(std::string const& version) {
-    return std::string(RELEASES) + "/download/v" + version + "/tipp7.versus.geode";
+// GD 버전별 통합 패키지 파일 이름. 릴리스마다 GD 버전별 패키지가 따로 있고, GD 2.2081용은 예전 이름 그대로다
+// (1.1.0 전의 업데이터는 그 이름과 매니페스트 맨 위 항목만 안다).
+inline std::string packageFile(std::string_view gameVersion) {
+    if (gameVersion == "2.2081") return "tipp7.versus.geode";
+    return "tipp7.versus-" + std::string(gameVersion) + ".geode";
+}
+// 버전 X.Y.Z 릴리스의, 그 GD 버전용 통합 패키지 주소.
+inline std::string packageUrl(std::string const& version, std::string_view gameVersion) {
+    return std::string(RELEASES) + "/download/v" + version + "/" + packageFile(gameVersion);
 }
 // 패키지 최대 크기(128MB)와 한 번에 요청하는 조각 크기(1MB).
 inline constexpr uint64_t MAX_SIZE = 128 * 1024 * 1024, CHUNK_SIZE = 1024 * 1024;
@@ -62,9 +68,10 @@ inline bool digestValid(std::string const& hash) {
     return hash.size() == 64 && std::all_of(hash.begin(), hash.end(),
                                             [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
-// 패키지 URL은 public 채널의, 그 버전 GitHub 릴리스의 통합 패키지 주소와 정확히 같아야 한다.
-inline bool allowedUrl(std::string const& url, std::string const& channel, std::string const& version) {
-    return channel == "public" && url == packageUrl(version);
+// 패키지 URL은 public 채널의, 그 버전 GitHub 릴리스에서 그 GD 버전용 통합 패키지 주소와 정확히 같아야 한다.
+inline bool allowedUrl(std::string const& url, std::string const& channel, std::string const& version,
+                       std::string_view gameVersion) {
+    return channel == "public" && url == packageUrl(version, gameVersion);
 }
 // 지원하는 플랫폼 이름인지.
 inline bool platformValid(std::string_view platform) {
@@ -75,7 +82,7 @@ inline std::string packageSuffix(std::string const& version, std::string const& 
     return "releases/" + version + "/tipp7.versus." + (platform.empty() ? std::string() : platform + ".") + "geode";
 }
 // 서버가 알려주는 업데이트 정보. 플랫폼별 패키지(url/sha256/size)와 통합
-// 패키지(unified*)를 함께 가질 수 있다.
+// 패키지(unified*)를 함께 가질 수 있다. game은 이 패키지가 대상으로 하는 GD 버전이다.
 // identity()는 이어받기 중인 파일이 같은 릴리스의 것인지 구분하는 키.
 struct Manifest {
     std::string version, url, sha256, channel;
@@ -83,6 +90,7 @@ struct Manifest {
     bool mandatory = true;
     std::string platform, unifiedUrl, unifiedSha256;
     uint64_t unifiedSize = 0;
+    std::string game;
     std::string identity() const { return channel + ":" + version + ":" + sha256 + ":" + std::to_string(size); }
     // 플랫폼별 정보를 통합 패키지 정보로 바꾼 사본.
     Manifest unified() const {
@@ -109,7 +117,7 @@ public:
         require(m.size >= 1024 && m.size <= MAX_SIZE, "Invalid download size");
         // GitHub 릴리스는 통합 패키지 하나만 제공한다.
         require(m.platform.empty(), "Invalid platform package");
-        require(allowedUrl(m.url, m.channel, m.version), "Untrusted download URL");
+        require(allowedUrl(m.url, m.channel, m.version, m.game), "Untrusted download URL");
     }
 };
 // 패치 계획의 조각 하나. kind: 'c' = 설치된 패키지에서 복사(baseOffset부터),

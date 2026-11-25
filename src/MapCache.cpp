@@ -3,7 +3,7 @@
 // 내려받은 레벨은 최대 8개까지 메모리에 두고, 배틀용으로만 받은 레벨은 GD Saved 목록에서 빼 둔다.
 #include "MapCache.hpp"
 #include "BattleLevelData.hpp"
-#include "GdCompat.hpp"
+#include "compat/Compat.hpp"
 #include "GdRequests.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GameLevelManager.hpp>
@@ -304,9 +304,9 @@ public:
     }
     // GD의 stopDownload와 같은 방식으로 오디오 요청 하나를 취소한다.
     static void stopRequest(MusicDownloadManager* music, char const* key) {
-        if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(versus::gd::musicRequest(music, key)))
+        if (auto* request = static_cast<cocos2d::extension::CCHttpRequest*>(versus::compat::musicRequest(music, key)))
             request->setShouldCancel(true);
-        versus::gd::forgetMusicRequest(music, key);
+        versus::compat::forgetMusicRequest(music, key);
     }
     // 지금 작업이 요청한 오디오 중 대기열의 다른 맵이 쓰지 않는 것을 멈춘다.
     void stopQueuedAudio() {
@@ -621,7 +621,7 @@ public:
             auto const& required = assetsFor(value);
             songs = required.first;
             sounds = required.second;
-            versus::gd::loadAudioLibraries(music);
+            versus::compat::loadAudioLibraries(music);
             music->addMusicDownloadDelegate(this);
             watchingMusic = true;
             progressed = audioBegan = Clock::now();

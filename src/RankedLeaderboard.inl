@@ -26,7 +26,7 @@ class RankedPlayerSearchPopup final : public ::versus::DeferredPopup {
     CCLabelBMFont* m_status = nullptr;
     // 닫힐 때 입력창 포커스를 풀어 키보드 입력이 남지 않게 한다.
     void onExit() override {
-        if (m_query) m_query->unfocus();
+        compat::unfocus(m_query);
         Popup::onExit();
     }
 
@@ -95,7 +95,7 @@ class RankedPlayerSearchPopup final : public ::versus::DeferredPopup {
         m_query->setCommonFilter(CommonFilter::Any);
         m_query->setMaxCharCount(20);
         m_query->setScale(.8f);
-        m_query->setContentSize({230.f / .8f, m_query->getContentHeight()});
+        compat::setWidth(m_query, 230.f / .8f);
         m_query->setPosition({165.f, 226.f});
         styleInput(m_query);
         m_query->setCallback([](std::string const&) {});

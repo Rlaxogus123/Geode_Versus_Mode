@@ -9,6 +9,7 @@
 #include "GdRequests.hpp"
 #include "LevelSelector.hpp"
 #include "MapCache.hpp"
+#include "compat/Compat.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GameLevelManager.hpp>
 #include <Geode/binding/GJGameLevel.hpp>
@@ -256,7 +257,7 @@ public:
         began = next = Clock::now();
     }
     // 서버가 알려 주는 페이지 정보 문자열의 첫 필드(전체 레벨 수)를 읽어 현재 그룹에 반영한다.
-    void setupPageInfo(std::string info, char const* value) override {
+    void setupPageInfo(versus::compat::String info, char const* value) override {
         if (!owns(value)) return;
         std::string text(info);
         int count = 0;
@@ -485,7 +486,7 @@ public:
         if (owns(key)) finish(std::nullopt, "Not found on GD's servers.");
     }
     void loadLevelsFailed(char const* key, int) override { loadLevelsFailed(key); }
-    void setupPageInfo(std::string, char const*) override {}
+    void setupPageInfo(versus::compat::String, char const*) override {}
     void update(float) override {
         if (!m_done) return;
         auto const now = Clock::now();

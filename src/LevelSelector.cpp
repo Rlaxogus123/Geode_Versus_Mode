@@ -4,6 +4,7 @@
 #include "LevelSelector.hpp"
 #include "MapPool.hpp"
 #include "VersusUI.hpp"
+#include "compat/GameHooks.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GJGameLevel.hpp>
@@ -248,39 +249,30 @@ void openLevelSearch(std::function<void(LevelInfo)> onSelected) {
 }
 }
 
-// 선택 모드일 때 검색 화면에 감시 노드를 붙이고, 뒤로 가기를 방 복귀로 바꾼다.
-// iOS 2.2091 바인딩에는 onBack 주소가 없어서, iOS에서는 뒤로 가기 버튼(Node IDs의 exit-button) 콜백을 바꾼다.
+// 선택 모드일 때 검색 화면에 감시 노드를 붙이고, 뒤로 가기(버튼, Esc / Android 뒤로 가기)를 방 복귀로 바꾼다.
+// 뒤로 가기는 GD의 onBack 훅(compat/gd2081, compat/gd2091의 GameHooks.cpp)이 아래 holdLevelSearchBack으로 넘긴다.
+// GD 2.2091 iOS 바인딩에는 onBack 주소가 없어서, 뒤로 가기 버튼(Node IDs의 exit-button)의 콜백도 바꿔 둔다.
 class $modify(VersusNativeLevelSearch,
               LevelSearchLayer){bool init(int type){if (!LevelSearchLayer::init(type)) return false;
 markPicker(this);
-#ifdef GEODE_IS_IOS
 if (ownsNode(this))
     if (auto* back = typeinfo_cast<CCMenuItem*>(getChildByIDRecursive("exit-button")))
         back->setTarget(this, menu_selector(VersusNativeLevelSearch::onVersusBack));
-#endif
 return true;
 }
 
-#ifdef GEODE_IS_IOS
-// 선택이 이미 끝났으면 GD의 원래 뒤로 가기(keyBackClicked가 onBack을 부른다)로 넘긴다.
+// 바꾼 뒤로 가기 버튼. 선택이 이미 끝났으면 GD의 원래 뒤로 가기(keyBackClicked가 onBack을 부른다)로 넘긴다.
 void onVersusBack(CCObject*) {
-    if (ownsNode(this)) {
-        returnToRoom();
-        return;
-    }
-    keyBackClicked();
+    if (!versus::hooks::holdLevelSearchBack(this)) keyBackClicked();
 }
-#else
-void onBack(CCObject* sender) {
-    if (ownsNode(this)) {
-        returnToRoom();
-        return;
-    }
-    LevelSearchLayer::onBack(sender);
-}
-#endif
 }
 ;
+
+bool versus::hooks::holdLevelSearchBack(LevelSearchLayer* layer) {
+    if (!ownsNode(layer)) return false;
+    returnToRoom();
+    return true;
+}
 
 // 레벨 브라우저 화면에도 선택 모드 표시를 붙인다.
 class $modify(VersusNativeLevelBrowser,

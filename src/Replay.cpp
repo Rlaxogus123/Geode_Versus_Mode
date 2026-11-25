@@ -6,7 +6,8 @@
 // 포맷 자체는 ReplayFormat.hpp에 있다.
 #include "Replay.hpp"
 #include "ExternalCheatMonitor.hpp"
-#include "GdCompat.hpp"
+#include "compat/Compat.hpp"
+#include "compat/GameHooks.hpp"
 #include "MapCache.hpp"
 #include "MatchLaunch.hpp"
 #include "PercentGuard.hpp"
@@ -659,7 +660,7 @@ public:
         versus::snapshotBattleLevelStats(static_cast<int>(recording.levelId));
         versus::pauseBattleMods();
         constructing = true;
-        auto* scene = PlayLayer::scene(copy, false);
+        auto* scene = versus::compat::playScene(copy);
         constructing = false;
         if (!scene || !play.lock()) {
             versus::restoreBattleLevelStats();
@@ -1860,15 +1861,16 @@ using versus::replay::Viewer;
 using versus::replay::Live;
 
 // PlayLayer 후킹. init에서 뷰어 레이어를 연결하고, 진입이 끝나면 HUD를 붙여 Ready로 넘긴다.
-// startGame/startGameDelayed는 뷰어 제어 중 막고, resetLevel/destroyPlayer/levelComplete는 재생 규칙에 맞게 처리한다.
+// startGame과 GD의 지연 시작(versus::hooks::holdReplayStart)은 뷰어 제어 중 막고, resetLevel/destroyPlayer/levelComplete는
+// 재생 규칙에 맞게 처리한다.
 // 뷰어/라이브의 사망은 GD 재시도 화면 대신 자동 재시도로 처리해, 다시 시작할지는 resetLevel 훅이 정한다.
 class $modify(VersusReplayPlayLayer, PlayLayer){
-    bool init(GJGameLevel* level, bool dontCreateObjects){auto* viewer = Viewer::peek();
+    bool init(VERSUS_PLAY_INIT_PARAMS){auto* viewer = Viewer::peek();
 if (viewer && viewer->constructing) {
     versus::rebind(viewer->play, static_cast<PlayLayer*>(this));
     versus::attachPausedMods(this);
 }
-return PlayLayer::init(level, dontCreateObjects);
+return PlayLayer::init(VERSUS_PLAY_INIT_ARGS);
 }
 void onEnterTransitionDidFinish() {
     PlayLayer::onEnterTransitionDidFinish();
@@ -1885,14 +1887,6 @@ void startGame() {
     if (viewer && viewer->owns(this) && !viewer->starting) return;
     PlayLayer::startGame();
 }
-// iOS 2.2091 바인딩에는 startGameDelayed 주소가 없다.
-#ifndef GEODE_IS_IOS
-void startGameDelayed() {
-    auto* viewer = Viewer::peek();
-    if (viewer && viewer->owns(this)) return;
-    PlayLayer::startGameDelayed();
-}
-#endif
 void resetLevel() {
     if (auto* live = Live::peek(); live && live->owns(this)) {
         if (live->ownReset) PlayLayer::resetLevel();
@@ -1905,7 +1899,7 @@ void resetLevel() {
     }
     if (viewer->ended && !viewer->restart) return;
     viewer->restart = false;
-    setActiveStartPosObject(nullptr);
+    versus::compat::clearStartPos(this);
     versus::replay::seedAttempt(this, viewer->recording.seedBase, viewer->recording.run);
     PlayLayer::resetLevel();
     viewer->rearm();
@@ -1913,7 +1907,7 @@ void resetLevel() {
 void destroyPlayer(PlayerObject* player, GameObject* object) {
     if (auto* live = Live::peek(); live && live->owns(this)) {
         if (live->deathAllowed()) {
-            versus::gd::AutoRetryScope retry;
+            versus::compat::AutoRetryScope retry;
             PlayLayer::destroyPlayer(player, object);
         }
         return;
@@ -1925,7 +1919,7 @@ void destroyPlayer(PlayerObject* player, GameObject* object) {
     }
     if (!viewer->armed || (!viewer->inputsOnly && viewer->recordedNow() < viewer->recording.endStep)) return;
     {
-        versus::gd::AutoRetryScope retry;
+        versus::compat::AutoRetryScope retry;
         PlayLayer::destroyPlayer(player, object);
     }
     bool const early = viewer->recordedNow() < viewer->recording.endStep;
@@ -2008,6 +2002,12 @@ void handleButton(bool down, int button, bool isPlayer1) {
 }
 ;
 
+// 뷰어가 맡은 레이어는 GD의 지연 시작도 막는다(시작은 뷰어가 startGame으로 한다).
+bool versus::hooks::holdReplayStart(PlayLayer* layer) {
+    auto* viewer = Viewer::peek();
+    return viewer && viewer->owns(layer);
+}
+
 // 아래는 난수 고정용 후킹. 트리거(효과/랜덤/스폰)와 그룹 조회, Advanced Follow 처리가 도는 동안
 // SeedScope를 걸어 그 위치의 난수가 시도마다 같게 나오도록 한다. siteKey의 첫 인자가 위치 종류다.
 namespace {
@@ -2017,7 +2017,7 @@ using versus::replay::siteKey;
 
 class $modify(VersusSeededEffect, EffectGameObject){
     void triggerObject(GJBaseGameLayer * layer, int uniqueID,
-                       std::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(1, this));
+                       versus::compat::Vector<int> const* remapKeys){SeedScope scope(layer, siteKey(1, this));
 EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
 }
 }
@@ -2025,7 +2025,7 @@ EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
 
 class $modify(VersusSeededRandom, RandTriggerGameObject){
     void triggerObject(GJBaseGameLayer * layer, int uniqueID,
-                       std::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(2, this));
+                       versus::compat::Vector<int> const* remapKeys){SeedScope scope(layer, siteKey(2, this));
 RandTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
 }
 }
@@ -2033,7 +2033,7 @@ RandTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
 
 class $modify(VersusSeededSpawn, SpawnTriggerGameObject){
     void triggerObject(GJBaseGameLayer * layer, int uniqueID,
-                       std::vector<int> const* remapKeys){SeedScope scope(layer, siteKey(3, this));
+                       versus::compat::Vector<int> const* remapKeys){SeedScope scope(layer, siteKey(3, this));
 SpawnTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
 }
 }

@@ -606,8 +606,8 @@ class Season2MapBansPopup final : public ::versus::DeferredPopup {
     CCLabelBMFont* m_pageLabel = nullptr;
     CCMenuItemSpriteExtra *m_previous = nullptr, *m_next = nullptr, *m_find = nullptr, *m_ban = nullptr;
     void onExit() override {
-        if (m_id) m_id->unfocus();
-        if (m_reason) m_reason->unfocus();
+        compat::unfocus(m_id);
+        compat::unfocus(m_reason);
         Popup::onExit();
     }
     bool init(std::string cup, std::function<void()> changed) {
@@ -797,7 +797,7 @@ class Season2MapBansPopup final : public ::versus::DeferredPopup {
     // 입력한 ID 의 레벨을 GD 에서 찾는다. 못 찾아도 ID 로 밴할 수 있게 카드를 보여 준다.
     void onFind(CCObject*) {
         if (!m_staff || m_busy || m_looking) return;
-        m_id->unfocus();
+        compat::unfocus(m_id);
         std::string const text(m_id->getString());
         int64_t id = 0;
         auto const parsed = std::from_chars(text.data(), text.data() + text.size(), id);
@@ -843,7 +843,7 @@ class Season2MapBansPopup final : public ::versus::DeferredPopup {
     // 사유를 확인하고 확인창을 거쳐 밴(이미 밴된 맵이면 사유 변경)한다.
     void onBan(CCObject*) {
         if (!m_staff || m_busy || !m_found) return;
-        m_reason->unfocus();
+        compat::unfocus(m_reason);
         std::string reason(m_reason->getString());
         if (reason.find_first_not_of(' ') == std::string::npos) {
             Notification::create("Write the reason for the ban", NotificationIcon::Warning)->show();

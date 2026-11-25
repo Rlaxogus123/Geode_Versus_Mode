@@ -4,7 +4,7 @@
 #include "UpdateManager.hpp"
 #include "../Edition.hpp"
 #include "../DebugMode.hpp"
-#include "../PathCompat.hpp"
+#include "../compat/Compat.hpp"
 #include <Geode/binding/GJAccountManager.hpp>
 #include "UpdateIntegration.hpp"
 #include <Geode/Geode.hpp>
@@ -27,7 +27,7 @@ namespace {
 // 받은 파일은 매니페스트의 크기와 SHA-256으로 검증한다.
 web::WebRequest request() {
     auto req = web::WebRequest();
-    req.timeout(asp::Duration::fromSecs(20));
+    req.timeout(versus::compat::requestTimeout(20));
     req.certVerification(true);
     req.followRedirects(true);
     req.acceptEncoding("identity");
@@ -61,20 +61,30 @@ std::string string(matjson::Value const& value, char const* key) {
 }
 // GitHub 최신 릴리스의 매니페스트를 받아 검증한다.
 // modId, 채널(public), 스키마(1), 크기 범위, 정책 필드, 패키지 주소를 확인한다.
+// 패키지는 GD 버전마다 따로 있다(packages의 "2.2081", "2.2091"). 맨 위의 url / sha256 / size는 GD 2.2081
+// 패키지라서 1.1.0 전의 업데이터도 읽을 수 있고, packages가 없는 매니페스트에서는 그것을 쓴다.
 Manifest fetchManifest() {
     auto value = json(withRetry([&] { return request().getSync(manifestUrl()); }));
     std::string const channel = "public";
     require(string(value, "modId") == "tipp7.versus" && string(value, "channel") == channel,
             "Manifest identity mismatch");
-    auto schema = value.get("schema"), size = value.get("size"), mandatory = value.get("mandatory");
+    std::string const game(versus::compat::kGameVersion);
+    matjson::Value package = value;
+    if (auto packages = value.get("packages"); packages.isOk()) {
+        auto entry = packages.unwrap().get(game);
+        require(entry.isOk() && entry.unwrap().isObject(), "This update has no package for your Geometry Dash version");
+        package = entry.unwrap();
+    }
+    auto schema = value.get("schema"), size = package.get("size"), mandatory = value.get("mandatory");
     require(schema.isOk() && schema.unwrap().asInt().unwrapOr(0) == 1, "Unsupported update schema");
     require(size.isOk() && size.unwrap().isNumber(), "Missing download size");
     auto number = size.unwrap().asDouble().unwrapOr(0);
     require(number >= 1024 && number <= MAX_SIZE && std::floor(number) == number, "Invalid download size");
     require(mandatory.isOk() && mandatory.unwrap().isBool(), "Invalid update policy");
-    Manifest m{string(value, "version"),      string(value, "url"),
-               string(value, "sha256"),       channel,
+    Manifest m{string(value, "version"),      string(package, "url"),
+               string(package, "sha256"),     channel,
                static_cast<uint64_t>(number), mandatory.unwrap().asBool().unwrap()};
+    m.game = game;
     ManifestVerifier().validate(m);
     return m;
 }
@@ -113,14 +123,14 @@ void UpdateManager::check() {
     }
     try {
         auto* mod = Mod::get();
-        m_context.directory = versus::stdPath(mod->getSaveDir() / "updater");
-        regularOrAbsent(versus::stdPath(mod->getPackagePath()));
+        m_context.directory = versus::compat::stdPath(mod->getSaveDir() / "updater");
+        regularOrAbsent(versus::compat::stdPath(mod->getPackagePath()));
         auto* account = GJAccountManager::sharedState();
         m_creator = account && (debug::debugAccount(std::string(account->m_username), account->m_accountID) ||
                                 debug::listedAccount(mod->getSavedValue<std::string>(debug::kStaffAccountsKey, ""),
                                                      account->m_accountID));
-        m_context.package = fs::weakly_canonical(versus::stdPath(mod->getPackagePath()));
-        m_context.modsDirectory = versus::stdPath(dirs::getModsDir());
+        m_context.package = fs::weakly_canonical(versus::compat::stdPath(mod->getPackagePath()));
+        m_context.modsDirectory = versus::compat::stdPath(dirs::getModsDir());
         {
             std::lock_guard lock(m_mutex);
             m_snapshot.installedVersion = mod->getVersion().toNonVString();
@@ -180,16 +190,18 @@ void UpdateManager::performCheck() {
                          : same     ? "Up to date"
                                     : "Update required to enter Versus";
 }
-// 받은 파일을 검증한다: 크기와 해시, Geode 패키지 형식, 모드 ID와 버전, 플랫폼 바이너리
+// 받은 파일을 검증한다: 크기와 해시, Geode 패키지 형식, 모드 ID와 버전, 대상 GD 버전, 플랫폼 바이너리
 // 포함 여부,
 // 요구하는 Geode 로더 버전.
 void UpdateManager::validateArchive(fs::path const& path, Manifest const& manifest) {
     verifyFile(path, manifest);
-    auto meta = ModMetadata::createFromGeodeFile(versus::geodePath(path));
+    auto meta = ModMetadata::createFromGeodeFile(versus::compat::geodePath(path));
     requirePackage(!meta.hasErrors(), "Downloaded file is not a valid Geode package");
     requirePackage(meta.getID() == "tipp7.versus" && meta.getVersion().toNonVString() == manifest.version,
                    "Package version mismatch");
-    auto zip = file::Unzip::create(versus::geodePath(path));
+    requirePackage(meta.getGameVersion().value_or("") == versus::compat::kGameVersion,
+                   "This update is for another Geometry Dash version");
+    auto zip = file::Unzip::create(versus::compat::geodePath(path));
     requirePackage(zip.isOk(), "Cannot open downloaded package");
     requirePackage(zip.unwrap().hasEntry(std::string(meta.getBinaryName())),
                    "This update does not support your platform");
@@ -220,7 +232,7 @@ std::optional<PatchPlan> UpdateManager::loadPatch(Manifest const& manifest) {
         if (url.empty() || m_cancel) return std::nullopt;
         auto send = [&] {
             auto req = request();
-            req.timeout(asp::Duration::fromSecs(6));
+            req.timeout(versus::compat::requestTimeout(6));
             return req.getSync(url);
         };
         auto response = send();
@@ -367,7 +379,7 @@ void UpdateManager::download() {
                 std::lock_guard lock(m_mutex);
                 m_snapshot.busy = false;
                 m_snapshot.downloaded = manifest.size;
-                m_snapshot.downloadedPath = versus::pathText(ready);
+                m_snapshot.downloadedPath = versus::compat::pathText(ready);
                 m_snapshot.state = automatic ? UpdateState::ReadyToInstall : UpdateState::VerifiedDownloaded;
                 m_snapshot.message =
                     automatic ? "최신버전 다운로드 완료!\n업데이트 적용을 위해 Geometry Dash를 재시작해야 합니다."

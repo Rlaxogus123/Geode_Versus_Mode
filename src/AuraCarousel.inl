@@ -177,9 +177,9 @@ public:
         m_dragging = false;
     }
     // 마우스 휠: 가로 입력이 있으면 그것을, 없으면 세로 입력을 가로 스크롤로 쓴다.
-    bool scrollWheel(float y, float x) override {
-        if (!nodeIsVisible(this) || !contains(getMousePos())) return false;
+    compat::ScrollResult scrollWheel(float y, float x) override {
+        if (!nodeIsVisible(this) || !contains(getMousePos())) return compat::scrolled(false);
         scrollBy((std::abs(x) > .01f ? x : y) * 2.f);
-        return true;
+        return compat::scrolled(true);
     }
 };

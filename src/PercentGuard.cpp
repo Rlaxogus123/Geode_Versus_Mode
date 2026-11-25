@@ -1,7 +1,7 @@
 // Percentage Toggle 모드 때문에 레벨의 m_timestamp(측정 길이)가 0이 되거나 바뀌는 문제를 막는다.
 // 배틀 시작 시 값을 기록하고(prepareLevel), 플레이 중 바뀌면 되돌린다(enforce).
 #include "PercentGuard.hpp"
-#include "PathCompat.hpp"
+#include "compat/Compat.hpp"
 #include "WeakRefs.hpp"
 
 #include <Geode/Geode.hpp>
@@ -28,7 +28,7 @@ matjson::Value toggleSaveData() {
     }
     auto const path = dirs::getModsSaveDir() / versus::percent::kPercentageToggle / "saved.json";
     std::error_code error;
-    if (!std::filesystem::is_regular_file(versus::stdPath(path), error)) return {};
+    if (!std::filesystem::is_regular_file(versus::compat::stdPath(path), error)) return {};
     auto json = utils::file::readJson(path);
     if (json.isErr()) return {};
     matjson::Value const saved = std::move(json).unwrap();

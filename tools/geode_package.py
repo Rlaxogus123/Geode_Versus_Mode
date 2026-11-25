@@ -1,10 +1,14 @@
 """Versus 패키지(tipp7.versus.geode) 도구. GitHub 릴리스가 이 저장소만으로 만들어졌는지 누구나 확인할 수 있게 한다.
 
+    python3 tools/geode_package.py modjson <GD 버전> [--repo 저장소 폴더]
+        mod.json을 GD 2.2081(Geode 5) 또는 GD 2.2091(Geode 6) 빌드용으로 바꾼다. 바뀌는 것은 Geode 버전,
+        플랫폼별 GD 버전, Argon 의존성(GD 2.2091만)뿐이고 나머지 줄은 그대로 둔다.
     python3 tools/geode_package.py normalize <입력.geode> <출력.geode> [--epoch 초]
         같은 내용이면 언제 만들어도 바이트까지 같은 파일이 되도록 다시 묶는다
         (항목 이름순, 시각은 --epoch 또는 SOURCE_DATE_EPOCH, deflate 9, 권한 고정).
     python3 tools/geode_package.py check <패키지.geode> [--repo 저장소 폴더]
-        바이너리 5개를 뺀 모든 항목이 저장소의 파일에서 왔는지 확인한다.
+        바이너리 5개를 뺀 모든 항목이 저장소의 파일에서 왔는지 확인한다. mod.json은 패키지가 가리키는 GD 버전용으로
+        바꾼 저장소의 mod.json(modjson)과 비교한다.
         PNG는 픽셀, 텍스트는 줄바꿈을 무시한 내용, 그 밖의 파일은 바이트로 비교한다.
         (Geode CLI가 PNG를 다시 압축하고, Windows 빌드는 텍스트를 CRLF로 꺼내므로 바이트는 다를 수 있다.)
     python3 tools/geode_package.py compare <a.geode> <b.geode>
@@ -22,6 +26,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import time
 import zipfile
@@ -33,10 +38,74 @@ ROOT_TEXT = ("mod.json", "about.md", "changelog.md")
 ROOT_IMAGES = ("logo.png",)
 TEXT_SUFFIXES = (".txt", ".md", ".json")
 ZIP_EPOCH_MIN = 315532800  # 1980-01-01, zip이 담을 수 있는 가장 이른 시각
+# 빌드할 수 있는 GD 버전: 그 버전의 Geode SDK 버전과 Argon 모드 의존성(없으면 None, GD 2.2081은 Argon을 CPM으로 넣는다).
+GD_TARGETS = {
+    "2.2081": {"geode": "5.7.1", "argon": None},
+    "2.2091": {"geode": "6.0.0", "argon": ">=v2.0.0-beta.1"},
+}
+GD_PLATFORMS = ("win", "android", "mac", "ios")
+ARGON_ID = "dankmeme.argon"
 
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def target_mod_json(text: str, gd: str) -> str:
+    """mod.json 내용(text)을 GD 버전 gd 빌드용으로 바꾼 내용. 줄바꿈과 다른 줄은 그대로 둔다."""
+    if gd not in GD_TARGETS:
+        raise SystemExit(f"unknown GD version {gd} (known: {', '.join(GD_TARGETS)})")
+    target = GD_TARGETS[gd]
+    text, count = re.subn(r'^(\s*"geode"\s*:\s*)"[^"]*"', lambda m: f'{m.group(1)}"{target["geode"]}"', text,
+                          count=1, flags=re.M)
+    if count != 1:
+        raise SystemExit('mod.json: no "geode" line')
+    gd_block = re.search(r'"gd"\s*:\s*\{[^}]*\}', text)
+    if not gd_block:
+        raise SystemExit('mod.json: no "gd" object')
+    block = re.sub(r'("(?:' + "|".join(GD_PLATFORMS) + r')"\s*:\s*)"[^"]*"', lambda m: f'{m.group(1)}"{gd}"',
+                   gd_block.group(0))
+    text = text[:gd_block.start()] + block + text[gd_block.end():]
+    argon_line = re.search(r'^[ \t]*"' + re.escape(ARGON_ID) + r'"\s*:\s*"[^"]*",?[ \t]*\r?\n', text, flags=re.M)
+    if target["argon"] is None:
+        if argon_line:
+            text = text[:argon_line.start()] + text[argon_line.end():]
+    elif argon_line:
+        line = re.sub(r'(:\s*)"[^"]*"', lambda m: f'{m.group(1)}"{target["argon"]}"', argon_line.group(0), count=1)
+        text = text[:argon_line.start()] + line + text[argon_line.end():]
+    else:
+        # Node IDs 의존성 바로 아래에 같은 들여쓰기로 넣는다.
+        anchor = re.search(r'^([ \t]*)"geode\.node-ids"\s*:\s*"[^"]*",?[ \t]*(\r?\n)', text, flags=re.M)
+        if not anchor:
+            raise SystemExit('mod.json: no "geode.node-ids" dependency line to put Argon after')
+        line = f'{anchor.group(1)}"{ARGON_ID}": "{target["argon"]}",{anchor.group(2)}'
+        text = text[:anchor.end()] + line + text[anchor.end():]
+    meta = json.loads(text)
+    assert meta["geode"] == target["geode"], meta["geode"]
+    assert all(meta["gd"][name] == gd for name in GD_PLATFORMS), meta["gd"]
+    assert meta["dependencies"].get(ARGON_ID) == target["argon"], meta["dependencies"]
+    return text
+
+
+def write_mod_json(repo: str, gd: str) -> bool:
+    """저장소의 mod.json을 gd 빌드용으로 바꿔 쓴다. 바뀌었으면 True."""
+    path = os.path.join(repo, "mod.json")
+    with open(path, encoding="utf-8", newline="") as handle:
+        text = handle.read()
+    result = target_mod_json(text, gd)
+    if result != text:
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(result)
+    return result != text
+
+
+def package_gd(entries: dict[str, bytes]) -> str:
+    """패키지의 mod.json이 가리키는 GD 버전."""
+    meta = json.loads(entries["mod.json"])
+    versions = {meta["gd"][name] for name in GD_PLATFORMS}
+    if len(versions) != 1:
+        raise SystemExit(f"mod.json gd versions differ by platform: {meta['gd']}")
+    return versions.pop()
 
 
 def read_entries(path: str) -> dict[str, bytes]:
@@ -113,6 +182,7 @@ def repo_resources(repo: str) -> dict[str, str]:
 def check(package_path: str, repo: str) -> bool:
     entries = read_entries(package_path)
     expected = repo_resources(repo)
+    gd = package_gd(entries) if "mod.json" in entries else None
     problems: list[str] = []
     counts: dict[str, int] = {}
 
@@ -131,6 +201,16 @@ def check(package_path: str, repo: str) -> bool:
             if json.loads(data) != {"spritesheets": {}, "fonts": {}}:
                 problems.append(".geode_cache is not empty")
             note("generated .geode_cache")
+            continue
+        if name == "mod.json":
+            path = os.path.join(repo, name)
+            with open(path, encoding="utf-8", newline="") as handle:
+                original = target_mod_json(handle.read(), gd).encode("utf-8")
+            ok, how = same_file(name, data, original)
+            if not ok:
+                problems.append(f"mod.json: differs from the repository's mod.json for GD {gd} ({how})")
+            else:
+                note(f"same as the repository ({how}, mod.json for GD {gd})")
             continue
         if name in ROOT_TEXT or name in ROOT_IMAGES:
             path = os.path.join(repo, name)
@@ -151,7 +231,7 @@ def check(package_path: str, repo: str) -> bool:
     for name in sorted(set(expected) - set(entries)):
         problems.append(f"{name}: in the repository but not in the package")
 
-    print(f"{package_path}: {len(entries)} entries, sha256 {sha256(open(package_path, 'rb').read())}")
+    print(f"{package_path}: GD {gd}, {len(entries)} entries, sha256 {sha256(open(package_path, 'rb').read())}")
     for kind, count in sorted(counts.items()):
         print(f"  {count:4d}  {kind}")
     for problem in problems:
@@ -185,6 +265,9 @@ def compare(a: str, b: str) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
+    zero = sub.add_parser("modjson")
+    zero.add_argument("gd", choices=sorted(GD_TARGETS))
+    zero.add_argument("--repo", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     one = sub.add_parser("normalize")
     one.add_argument("source")
     one.add_argument("target")
@@ -198,6 +281,11 @@ def main() -> int:
     four = sub.add_parser("list")
     four.add_argument("package")
     args = parser.parse_args()
+    if args.command == "modjson":
+        changed = write_mod_json(args.repo, args.gd)
+        target = GD_TARGETS[args.gd]
+        print(f"mod.json: GD {args.gd}, Geode {target['geode']}" + ("" if changed else " (already)"))
+        return 0
     if args.command == "normalize":
         print(normalize(args.source, args.target, args.epoch))
         return 0
