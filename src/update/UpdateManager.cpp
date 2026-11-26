@@ -60,31 +60,37 @@ std::string string(matjson::Value const& value, char const* key) {
     return field.unwrap().asString().unwrap();
 }
 // GitHub 최신 릴리스의 매니페스트를 받아 검증한다.
-// modId, 채널(public), 스키마(1), 크기 범위, 정책 필드, 패키지 주소를 확인한다.
+// modId, 채널(public), 스키마(1), 버전, 정책 필드를 확인하고, 이 GD 버전용 패키지가 있으면 크기와 주소도 확인한다.
 // 패키지는 GD 버전마다 따로 있다(packages의 "2.2081", "2.2091"). 맨 위의 url / sha256 / size는 GD 2.2081
-// 패키지라서 1.1.0 전의 업데이터도 읽을 수 있고, packages가 없는 매니페스트에서는 그것을 쓴다.
+// 패키지라서 1.1.0 전의 업데이터도 읽을 수 있다. packages가 없는 매니페스트(1.1.0 전 릴리스)에는 GD 2.2081
+// 패키지뿐이다. 이 GD 버전용 패키지가 없으면 url이 빈 매니페스트를 돌려준다. 그 릴리스를 받아야 할 때만
+// performCheck가 멈추고, 그보다 새 테스트 빌드는 버전 비교대로 처리된다.
 Manifest fetchManifest() {
     auto value = json(withRetry([&] { return request().getSync(manifestUrl()); }));
     std::string const channel = "public";
     require(string(value, "modId") == "tipp7.versus" && string(value, "channel") == channel,
             "Manifest identity mismatch");
-    std::string const game(versus::compat::kGameVersion);
-    matjson::Value package = value;
-    if (auto packages = value.get("packages"); packages.isOk()) {
-        auto entry = packages.unwrap().get(game);
-        require(entry.isOk() && entry.unwrap().isObject(), "This update has no package for your Geometry Dash version");
-        package = entry.unwrap();
-    }
-    auto schema = value.get("schema"), size = package.get("size"), mandatory = value.get("mandatory");
+    auto schema = value.get("schema"), mandatory = value.get("mandatory");
     require(schema.isOk() && schema.unwrap().asInt().unwrapOr(0) == 1, "Unsupported update schema");
+    require(mandatory.isOk() && mandatory.unwrap().isBool(), "Invalid update policy");
+    Manifest m{string(value, "version"), "", "", channel, 0, mandatory.unwrap().asBool().unwrap()};
+    m.game = versus::compat::kGameVersion;
+    require(versionValid(m.version), "Invalid semantic version");
+    std::optional<matjson::Value> package;
+    if (auto packages = value.get("packages"); packages.isOk()) {
+        if (auto entry = packages.unwrap().get(m.game); entry.isOk() && entry.unwrap().isObject())
+            package = entry.unwrap();
+    } else if (m.game == "2.2081") {
+        package = value;
+    }
+    if (!package) return m;
+    auto size = package->get("size");
     require(size.isOk() && size.unwrap().isNumber(), "Missing download size");
     auto number = size.unwrap().asDouble().unwrapOr(0);
     require(number >= 1024 && number <= MAX_SIZE && std::floor(number) == number, "Invalid download size");
-    require(mandatory.isOk() && mandatory.unwrap().isBool(), "Invalid update policy");
-    Manifest m{string(value, "version"),      string(package, "url"),
-               string(package, "sha256"),     channel,
-               static_cast<uint64_t>(number), mandatory.unwrap().asBool().unwrap()};
-    m.game = game;
+    m.url = string(*package, "url");
+    m.sha256 = string(*package, "sha256");
+    m.size = static_cast<uint64_t>(number);
     ManifestVerifier().validate(m);
     return m;
 }
@@ -175,6 +181,9 @@ void UpdateManager::performCheck() {
     }
     require(debugBuild || current.unwrap() <= latest.unwrap(),
             "Server release is older than this installation. Please retry later.");
+    bool const same = debugBuild || sameRelease(old.installedVersion, manifest.version);
+    // 받아야 하는 릴리스에 이 GD 버전용 패키지가 없다(fetchManifest 참고).
+    require(same || !manifest.url.empty(), "This update has no package for your Geometry Dash version");
     std::lock_guard lock(m_mutex);
     // 플랫폼 패키지가 쓸 수 없다고 판명된 버전은 통합 패키지로 바꾼다.
     if (!manifest.platform.empty() && manifest.version == m_unifiedOnly) manifest = manifest.unified();
@@ -184,7 +193,6 @@ void UpdateManager::performCheck() {
     m_snapshot.busy = false;
     m_snapshot.transferTotal = 0;
     m_snapshot.transferDone = 0;
-    bool same = debugBuild || sameRelease(old.installedVersion, m_snapshot.manifest.version);
     m_snapshot.state = same ? UpdateState::Current : UpdateState::UpdateAvailable;
     m_snapshot.message = debugBuild ? "Debug build (newer than the server)"
                          : same     ? "Up to date"
