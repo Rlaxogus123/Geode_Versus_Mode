@@ -1,13 +1,13 @@
 # Changelog
 
-## v1.1.0 (in progress)
+## v1.1.0 (2026-11-26)
 
 ### Geometry Dash 2.2091
 - Versus now also runs on Geometry Dash 2.2091 with Geode 6 (Windows, macOS, Android and iOS), and still runs on 2.2081 with Geode 5. Each release has one file for each: `tipp7.versus.geode` for 2.2081 (Versus keeps updating itself to it) and `tipp7.versus-2.2091.geode` for 2.2091. After you update the game and Geode to 2.2091, install `tipp7.versus-2.2091.geode` once with Geode's install-from-file button (it replaces the old Versus; if you copy the file into Geode's `mods` folder yourself, delete `tipp7.versus.geode` there, or Geode may load neither); from then on Versus updates itself.
 - On 2.2091, Versus needs the Argon mod (Argon 2) for GD account linking. Geode doesn't install it along with a file you install yourself: when Geode says Versus is missing a dependency, install Argon from there (or from Geode's mod list).
 - On 2.2091, battles follow the new keybinds: jump, pause and the other game keys work with the keys you bound yourself, and holding any key bound to Pause works like holding Esc.
 - The start position switching, Ignore Damage and game speed keys of 2.2091 can't be used in battles.
-- Eclipse: Versus reads Eclipse's settings through Eclipse's own API, so it needs an Eclipse made for the same Geode as your game. Until there is an Eclipse for Geode 6, a loaded Eclipse counts as a banned feature in battles on 2.2091: turn Eclipse off in Geode there.
+- Eclipse: Versus reads Eclipse's settings through Eclipse's own API, so it needs the Eclipse made for the same Geode as your game: 1.10.0 or newer on 2.2091 (Geode 6), and the same Eclipse as before on 2.2081 (Geode 5). Its cheat features stay banned in battles on both.
 
 ### Fixes
 - macOS (Apple Silicon): with Versus installed the keyboard did nothing in levels (no jump, no pause; the mouse still worked), and with Eclipse the game could crash on a key press. Versus hooked GD's `UILayer::keyDown`, which on Apple Silicon is so short that the hook overwrote the entry point the keyboard actually calls. Versus now checks keys one step later (`UILayer::handleKeypress` on 2.2081, `UILayer::handleAction` on 2.2091).

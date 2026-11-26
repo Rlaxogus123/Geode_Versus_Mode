@@ -123,11 +123,16 @@ endif()
 # 상관없이 mod.json 범위에 맞는 최신판을 받으므로, 예를 들어 Geode 6용 Eclipse가 아직 없으면 Geode 5용 패키지가 오고
 # 그 헤더는 Geode 6에서 컴파일되지 않는다. 그때는 Unreadable.cpp가 들어가고, Versus는 Eclipse가 로드돼 있기만 해도
 # 대결에서 금지 기능으로 본다. 새 Eclipse API가 맞지 않아 빌드가 깨지면 -DVERSUS_USE_ECLIPSE_API=OFF로 끌 수 있다.
-# Geode CLI는 같은 메이저 버전(v1.x) 안에서 가장 최근에 올라온 Eclipse를 받으므로, Eclipse가 Geode 6용을 v1.x로 내면
-# GD 2.2081 빌드에도 그 패키지가 와서 Eclipse를 읽지 못하게 된다. 그런 빌드가 조용히 나가지 않도록, 읽을 수 있어야 하는
-# 빌드(GitHub Actions의 GD 2.2081 빌드)는 -DVERSUS_REQUIRE_ECLIPSE_API=ON으로 구성하고, 그때 읽지 못하면 멈춘다.
+# Geode CLI는 같은 메이저 버전(v1.x) 안에서 가장 최근에 올라온 Eclipse를 받는다. Eclipse는 v1.10.0부터 Geode 6용이라
+# mod.json의 Eclipse 범위를 GD 버전마다 나눈다(tools/geode_package.py). 그래도 읽지 못하는 빌드가 조용히 나가지 않도록,
+# GitHub Actions 빌드(릴리스)는 VERSUS_REQUIRE_ECLIPSE_API가 기본으로 켜져 있어 읽지 못하면 멈춘다.
+if(DEFINED ENV{GITHUB_ACTIONS})
+    set(VERSUS_REQUIRE_ECLIPSE_DEFAULT ON)
+else()
+    set(VERSUS_REQUIRE_ECLIPSE_DEFAULT OFF)
+endif()
 option(VERSUS_USE_ECLIPSE_API "Read Eclipse's settings when its package is for this Geode version" ON)
-option(VERSUS_REQUIRE_ECLIPSE_API "Stop when this build can't read Eclipse's settings" OFF)
+option(VERSUS_REQUIRE_ECLIPSE_API "Stop when this build can't read Eclipse's settings" ${VERSUS_REQUIRE_ECLIPSE_DEFAULT})
 set(VERSUS_ECLIPSE_SOURCE Unreadable.cpp)
 set(VERSUS_ECLIPSE_DEP "${CMAKE_CURRENT_BINARY_DIR}/geode-deps/eclipse.eclipse-menu")
 if(VERSUS_USE_ECLIPSE_API AND EXISTS "${VERSUS_ECLIPSE_DEP}/mod.json")
