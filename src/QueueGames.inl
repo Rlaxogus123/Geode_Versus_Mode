@@ -209,8 +209,7 @@ public:
     // 게임 선택 창으로 돌아가는 버튼을 단다.
     void setGameSwitcher(std::function<void()> choose) {
         m_chooseGame = std::move(choose);
-        iconButton(m_buttonMenu, this, menu_selector(QueueMinesweeper::onGames), "GJ_gpgBtn_001.png", {323.f, 288.f},
-                   25.f);
+        iconButton(m_buttonMenu, this, menu_selector(QueueMinesweeper::onGames), miniGamesFrame(), {323.f, 288.f}, 25.f);
     }
     static QueueMinesweeper* create() {
         auto* popup = new QueueMinesweeper;

@@ -134,7 +134,7 @@ ScrollLayer* systemTextBox(CCNode* parent, std::string const& text, CCPoint orig
     frame->setColor({8, 18, 44});
     frame->setOpacity(200);
     parent->addChild(frame);
-    auto* scroll = ScrollLayer::create(size);
+    auto* scroll = versus::compat::scrollLayer(size);
     scroll->setPosition(origin);
     parent->addChild(scroll, 2);
     auto* body =
@@ -272,7 +272,7 @@ class StaffWritePopup final : public ::versus::DeferredPopup {
         frame->setColor({8, 18, 44});
         frame->setOpacity(200);
         m_mainLayer->addChild(frame);
-        m_scroll = ScrollLayer::create({380.f, top - bottom});
+        m_scroll = versus::compat::scrollLayer({380.f, top - bottom});
         m_scroll->setPosition({20.f, bottom});
         m_mainLayer->addChild(m_scroll, 4);
         m_preview = createSystemText(" ", 13.f, 364.f, kCCTextAlignmentLeft);
@@ -1344,7 +1344,7 @@ class StaffRulesPopup final : public ::versus::DeferredPopup {
         paper->setColor({18, 23, 34});
         paper->setOpacity(225);
         m_mainLayer->addChild(paper);
-        m_scroll = ScrollLayer::create({PaperW, PaperH});
+        m_scroll = versus::compat::scrollLayer({PaperW, PaperH});
         m_scroll->setPosition({(W - PaperW) / 2.f, PaperY});
         m_mainLayer->addChild(m_scroll);
         m_english = button(m_buttonMenu, this, menu_selector(StaffRulesPopup::english), "English", {58.f, 24.f}, .42f);

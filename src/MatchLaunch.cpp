@@ -754,7 +754,8 @@ public:
         for (int id : effects) {
             if (music->isSFXDownloaded(id)) continue;
             ready = false;
-            if (requestedEffects.contains(id) || outstanding >= 3 || music->isDLActive(music->getSFXDownloadKey(id)))
+            if (requestedEffects.contains(id) || outstanding >= 3 ||
+                versus::compat::musicRequest(music, music->getSFXDownloadKey(id)))
                 continue;
             requestedEffects.insert(id);
             ++outstanding;

@@ -245,7 +245,7 @@ void SpectatorRunner::setMatchmakingMode(std::function<void()> switchGame, std::
         controls->addChild(item);
     }
     if (m->chooseGame) {
-        auto* switchSprite = CCSprite::createWithSpriteFrameName("GJ_gpgBtn_001.png");
+        auto* switchSprite = loadedFrameSprite(miniGamesFrame(), "GJ_GameSheet03.plist");
         if (switchSprite) {
             switchSprite->setScale(28.f / std::max(1.f, switchSprite->getContentSize().height));
             auto* game = CCMenuItemSpriteExtra::create(switchSprite, this, menu_selector(SpectatorRunner::switchGame));

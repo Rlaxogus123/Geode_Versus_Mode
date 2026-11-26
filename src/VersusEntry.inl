@@ -82,7 +82,7 @@ class PatchNotesPopup final : public ::versus::DeferredPopup {
         paper->setColor({18, 23, 34});
         paper->setOpacity(225);
         m_mainLayer->addChild(paper);
-        m_scroll = ScrollLayer::create({396.f, 190.f});
+        m_scroll = versus::compat::scrollLayer({396.f, 190.f});
         m_scroll->setPosition({12.f, 50.f});
         m_mainLayer->addChild(m_scroll);
         button(m_buttonMenu, this, menu_selector(PatchNotesPopup::english), "English", {137.f, 24.f}, .43f);
@@ -352,7 +352,7 @@ class MembershipInfoPopup final : public ::versus::DeferredPopup {
         paper->setColor({18, 23, 34});
         paper->setOpacity(225);
         m_mainLayer->addChild(paper);
-        m_scroll = ScrollLayer::create({PaperW, PaperH});
+        m_scroll = versus::compat::scrollLayer({PaperW, PaperH});
         m_scroll->setPosition({(W - PaperW) / 2.f, PaperY});
         m_mainLayer->addChild(m_scroll);
         m_english =

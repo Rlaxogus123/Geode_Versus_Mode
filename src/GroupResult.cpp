@@ -7,6 +7,7 @@
 #include "Edition.hpp"
 #include "MenuCursor.hpp"
 #include "MapRecord.hpp"
+#include "compat/Compat.hpp"
 #include <Geode/binding/CCCircleWave.hpp>
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/SimplePlayer.hpp>
@@ -228,7 +229,7 @@ CCNode* createGroupResult(GroupBattle const& battle, std::string const& selfUid,
     text(root, "RANKING", "goldFont.fnt", .5f, {listX + listWidth / 2.f, listTop + 8.f});
     float const rowHeight = 19.f;
     float const viewHeight = listTop - listBottom - 6.f;
-    auto* scroll = ScrollLayer::create({listWidth, viewHeight});
+    auto* scroll = versus::compat::scrollLayer({listWidth, viewHeight});
     scroll->setPosition({listX, listBottom});
     root->addChild(scroll, 3);
     float const contentHeight = std::max(viewHeight, rowHeight * ranking.size());

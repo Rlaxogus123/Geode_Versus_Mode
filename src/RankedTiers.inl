@@ -128,7 +128,7 @@ class RankedTiersPopup final : public ::versus::DeferredPopup {
         paper->setColor({12, 22, 44});
         paper->setOpacity(200);
         m_mainLayer->addChild(paper);
-        auto* scroll = ScrollLayer::create({396.f, 186.f});
+        auto* scroll = versus::compat::scrollLayer({396.f, 186.f});
         scroll->setPosition({12.f, 57.f});
         m_mainLayer->addChild(scroll);
         auto const count = ranked::TIER_DISPLAY.size();

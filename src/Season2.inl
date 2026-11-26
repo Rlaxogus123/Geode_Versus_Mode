@@ -300,7 +300,7 @@ class Season2TiersPopup final : public ::versus::DeferredPopup {
         paper->setColor({12, 22, 44});
         paper->setOpacity(200);
         m_view->addChild(paper);
-        auto* scroll = ScrollLayer::create({ListW, ListH});
+        auto* scroll = versus::compat::scrollLayer({ListW, ListH});
         scroll->setPosition({12.f, ListY});
         m_view->addChild(scroll);
         auto* content = scroll->m_contentLayer;

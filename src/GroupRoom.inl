@@ -907,7 +907,7 @@ class GroupSpectatePopup final : public ::versus::DeferredPopup {
         paper->setColor({12, 22, 44});
         paper->setOpacity(200);
         m_mainLayer->addChild(paper);
-        m_scroll = ScrollLayer::create({ListW, ListH});
+        m_scroll = versus::compat::scrollLayer({ListW, ListH});
         m_scroll->setPosition({12.f, 14.f});
         m_mainLayer->addChild(m_scroll);
         m_play = iconButton(m_buttonMenu, this, menu_selector(GroupSpectatePopup::onPlay), "GJ_playBtn2_001.png",

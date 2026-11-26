@@ -413,7 +413,8 @@ class LoungeAudio final : public CCNode, public MusicDownloadDelegate {
         return key > 0 ? music->isSongDownloaded(key) : music->isSFXDownloaded(-key);
     }
     static bool running(MusicDownloadManager* music, int key) {
-        return key > 0 ? music->isRunningActionForSongID(key) : music->isDLActive(music->getSFXDownloadKey(-key));
+        return key > 0 ? music->isRunningActionForSongID(key)
+                       : versus::compat::musicRequest(music, music->getSFXDownloadKey(-key)) != nullptr;
     }
     void failedOnce(int key, char const* why) {
         int const tries = ++m_attempts[key];
@@ -1120,7 +1121,7 @@ public:
         constexpr float pad = 24.f;
         for (auto* node : CCArrayExt<CCNode*>(ui->m_uiNodes)) {
             if (!node || !node->isVisible() || !node->getParent()) continue;
-            auto* button = typeinfo_cast<GJUINode*>(node);
+            auto* button = versus::compat::gdCast<GJUINode>(node);
             CCNode* const parts[] = {node, button ? button->m_firstSprite : nullptr,
                                      button ? button->m_secondSprite : nullptr};
             for (auto* part : parts) {

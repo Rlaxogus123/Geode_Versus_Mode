@@ -8,6 +8,7 @@
 #include "GameTypes.hpp" // compat/gd2081/ 또는 compat/gd2091/ (CMake가 고른 쪽)
 
 #include <Geode/Geode.hpp>
+#include <Geode/ui/ScrollLayer.hpp>
 
 #include <functional>
 #include <string>
@@ -32,7 +33,8 @@ std::string compressLevelString(std::string const& data);
 // 노래 정보 / 다운로드를 위한 GD 노래 위젯. 화면에는 보이지 않게 쓴다.
 CustomSongWidget* songWidget(SongInfoObject* info, bool musicLibrary);
 
-// GD 레벨 / 오디오 요청 관리자. 키는 GD가 요청마다 쓰는 키다.
+// GD 레벨 / 오디오 요청 관리자. 키는 GD가 요청마다 쓰는 키다. musicRequest는 진행 중인 오디오 요청(없으면
+// nullptr)으로, MusicDownloadManager::isDLActive 대신 쓴다(2.2091 iOS에서 isDLActive는 주소 없는 getDLObject를 부른다).
 bool levelRequestActive(GameLevelManager* manager, char const* key);
 void forgetLevelRequest(GameLevelManager* manager, char const* key);
 // 같은 요청을 다시 보내지 못하게 하는 GD의 대기 시간을 지운다.
@@ -78,4 +80,35 @@ public:
     AutoRetryScope(AutoRetryScope const&) = delete;
     AutoRetryScope& operator=(AutoRetryScope const&) = delete;
 };
+
+// 스크롤 목록. Geode 6의 ScrollLayer는 가운데를 기준으로 놓인다(anchor 0.5, ignoreAnchorPointForPosition false).
+// Versus는 목록을 Geode 5처럼 왼쪽 아래 모서리 기준으로 놓으므로 만들 때 그렇게 맞춘다(Geode 5에서는 바뀌는 것이
+// 없다). ScrollLayer를 상속한 클래스는 생성자에서 placeByCorner를 부른다.
+inline void placeByCorner(geode::ScrollLayer* scroll) {
+    if (scroll) scroll->ignoreAnchorPointForPosition(true);
+}
+inline geode::ScrollLayer* scrollLayer(cocos2d::CCSize const& size) {
+    auto* scroll = geode::ScrollLayer::create(size);
+    placeByCorner(scroll);
+    return scroll;
+}
+
+// GD 클래스인지 보고 바꾼다(typeinfo_cast와 같은 결과). 전역 이름공간의 GD 클래스(T::CLASS_NAME)에만 쓴다.
+// macOS / iOS의 GD는 클래스 type info를 내보내지 않아서, 바인딩에 그 클래스의 첫 가상 함수(대개 소멸자) 주소가
+// 없는 플랫폼에서는 typeinfo_cast<T*>가 링크되지 않는다(2.2091의 GJUINode, SongInfoObject). 그래서 Windows가 아니면
+// 객체의 type info를 이름으로 따라간다. Geode의 typeinfo_cast도 이름을 비교하므로 결과는 같다.
+template <class T>
+T* gdCast(cocos2d::CCObject* object) {
+#ifdef GEODE_IS_WINDOWS
+    return geode::cast::typeinfo_cast<T*>(object);
+#else
+    if (!object) return nullptr;
+    static std::string const name = std::to_string(std::char_traits<char>::length(T::CLASS_NAME)) + T::CLASS_NAME;
+    auto const* vtable = *reinterpret_cast<geode::cast::VtableType const* const*>(object);
+    auto const* info =
+        static_cast<geode::cast::VtableTypeinfoType const*>(static_cast<geode::cast::CompleteVtableType const*>(vtable));
+    auto* top = reinterpret_cast<std::byte*>(object) + info->m_offset;
+    return static_cast<T*>(geode::cast::traverseTypeinfoFor(top, info->m_typeinfo, name.c_str()));
+#endif
+}
 }

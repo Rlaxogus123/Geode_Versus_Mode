@@ -348,7 +348,7 @@ class TapScrollLayer final : public ScrollLayer {
     bool m_tracking = false;
     // 탭으로 인정하는 최대 이동 거리(화면 좌표).
     static constexpr float kTapSlop = 9.f;
-    explicit TapScrollLayer(CCRect const& rect) : ScrollLayer(rect, true, true) {}
+    explicit TapScrollLayer(CCRect const& rect) : ScrollLayer(rect, true, true) { versus::compat::placeByCorner(this); }
 
 public:
     static TapScrollLayer* create(CCSize const& size, std::function<void(CCNode*)> onTap) {
@@ -858,12 +858,12 @@ class LobbySongPopup final : public ::versus::DeferredPopup {
         };
         if (music) {
             if (auto* songs = music->getDownloadedSongs())
-                for (auto* object : CCArrayExt<CCObject*>(songs)) take(typeinfo_cast<SongInfoObject*>(object));
+                for (auto* object : CCArrayExt<CCObject*>(songs)) take(versus::compat::gdCast<SongInfoObject>(object));
             if (auto* known = music->m_songObjects) {
                 CCDictElement* element = nullptr;
                 CCDictElement* next = nullptr;
                 HASH_ITER(hh, known->m_pElements, element, next)
-                take(typeinfo_cast<SongInfoObject*>(element->getObject()));
+                take(versus::compat::gdCast<SongInfoObject>(element->getObject()));
             }
         }
         std::sort(found.begin(), found.end(), [](Song const& a, Song const& b) {
@@ -1237,7 +1237,7 @@ class BroadcastInboxPopup final : public ::versus::DeferredPopup {
         setID("versus-broadcast-inbox-popup"_spr);
         // 마지막으로 본 방송 ID를 읽어 와, 그보다 새로운 항목을 NEW로 강조한다.
         m_seen = Mod::get()->getSavedValue<int64_t>("broadcast-seen", 0);
-        m_scroll = ScrollLayer::create({392.f, 214.f});
+        m_scroll = versus::compat::scrollLayer({392.f, 214.f});
         m_scroll->setPosition({14.f, 18.f});
         m_mainLayer->addChild(m_scroll);
         m_status = label(m_mainLayer, "Loading...", {210.f, 126.f}, .5f, 360.f, kIce, false, "chatFont.fnt");
@@ -10055,7 +10055,7 @@ class RankedLayer final : public SceneLayer {
         m_confirm =
             button(rows, this, menu_selector(RankedLayer::onConfirm), "CONFIRM", {center + 75.f, kS2RowY}, .55f);
         m_confirm->setVisible(false);
-        m_runnerButton = iconButton(rows, this, menu_selector(RankedLayer::onQueueRunner), "GJ_gpgBtn_001.png",
+        m_runnerButton = iconButton(rows, this, menu_selector(RankedLayer::onQueueRunner), miniGamesFrame(),
                                     {center + 78.f, kS2RowY}, 30.f);
         m_runnerButton->setVisible(false);
         m_voteButton = button(rows, this, menu_selector(RankedLayer::onVoteReroll), "REROLL", {center + 80.f, kS2RowY},
@@ -10071,7 +10071,7 @@ class RankedLayer final : public SceneLayer {
         auto* music = iconButton(m_tools, this, menu_selector(RankedLayer::onSeason2Music), "GJ_audioOnBtn_001.png",
                                  {kToolPitch, 0.f}, kToolSize);
         music->setID("ranked-music-volume-button"_spr);
-        auto* game = iconButton(m_tools, this, menu_selector(RankedLayer::onQueueRunner), "GJ_gpgBtn_001.png",
+        auto* game = iconButton(m_tools, this, menu_selector(RankedLayer::onQueueRunner), miniGamesFrame(),
                                 {kToolPitch * 2.f, 0.f}, kToolSize);
         game->setID("season2-queue-game-button"_spr);
         iconButton(m_tools, this, menu_selector(RankedLayer::onGuide), "GJ_infoIcon_001.png",
@@ -11244,7 +11244,7 @@ public:
             m_confirm =
                 button(actions, this, menu_selector(RankedLayer::onConfirm), "CONFIRM", {center + 75.f, 20.f}, .55f);
             m_confirm->setVisible(false);
-            m_runnerButton = iconButton(actions, this, menu_selector(RankedLayer::onQueueRunner), "GJ_gpgBtn_001.png",
+            m_runnerButton = iconButton(actions, this, menu_selector(RankedLayer::onQueueRunner), miniGamesFrame(),
                                         {center + 78.f, 20.f}, 30.f);
             m_runnerButton->setVisible(false);
             makeDodgeBadge(actions, {center + 120.f, 20.f});

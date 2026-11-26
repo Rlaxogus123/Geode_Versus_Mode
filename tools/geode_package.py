@@ -2,7 +2,7 @@
 
     python3 tools/geode_package.py modjson <GD 버전> [--repo 저장소 폴더]
         mod.json을 GD 2.2081(Geode 5) 또는 GD 2.2091(Geode 6) 빌드용으로 바꾼다. 바뀌는 것은 Geode 버전,
-        플랫폼별 GD 버전, Argon 의존성(GD 2.2091만)뿐이고 나머지 줄은 그대로 둔다.
+        플랫폼별 GD 버전, Eclipse 의존성의 버전 범위, Argon 의존성(GD 2.2091만)뿐이고 나머지 줄은 그대로 둔다.
     python3 tools/geode_package.py normalize <입력.geode> <출력.geode> [--epoch 초]
         같은 내용이면 언제 만들어도 바이트까지 같은 파일이 되도록 다시 묶는다
         (항목 이름순, 시각은 --epoch 또는 SOURCE_DATE_EPOCH, deflate 9, 권한 고정).
@@ -38,13 +38,17 @@ ROOT_TEXT = ("mod.json", "about.md", "changelog.md")
 ROOT_IMAGES = ("logo.png",)
 TEXT_SUFFIXES = (".txt", ".md", ".json")
 ZIP_EPOCH_MIN = 315532800  # 1980-01-01, zip이 담을 수 있는 가장 이른 시각
-# 빌드할 수 있는 GD 버전: 그 버전의 Geode SDK 버전과 Argon 모드 의존성(없으면 None, GD 2.2081은 Argon을 CPM으로 넣는다).
+# 빌드할 수 있는 GD 버전: 그 버전의 Geode SDK 버전, Eclipse(선택 의존성)의 버전 범위, Argon 모드 의존성
+# (없으면 None, GD 2.2081은 Argon을 CPM으로 넣는다).
+# Eclipse는 v1.10.0부터 Geode 6용이다. Geode CLI는 Geode 버전을 보지 않고 범위에 맞는 가장 최근 버전을 받으므로,
+# GD 2.2081 빌드가 Geode 5용 Eclipse(설정 API 헤더)를 받도록 범위를 나눈다.
 GD_TARGETS = {
-    "2.2081": {"geode": "5.7.1", "argon": None},
-    "2.2091": {"geode": "6.0.0", "argon": ">=v2.0.0-beta.1"},
+    "2.2081": {"geode": "5.7.1", "eclipse": "<v1.10.0", "argon": None},
+    "2.2091": {"geode": "6.0.0", "eclipse": ">=v1.10.0", "argon": ">=v2.0.0-beta.1"},
 }
 GD_PLATFORMS = ("win", "android", "mac", "ios")
 ARGON_ID = "dankmeme.argon"
+ECLIPSE_ID = "eclipse.eclipse-menu"
 
 
 def sha256(data: bytes) -> str:
@@ -66,6 +70,10 @@ def target_mod_json(text: str, gd: str) -> str:
     block = re.sub(r'("(?:' + "|".join(GD_PLATFORMS) + r')"\s*:\s*)"[^"]*"', lambda m: f'{m.group(1)}"{gd}"',
                    gd_block.group(0))
     text = text[:gd_block.start()] + block + text[gd_block.end():]
+    eclipse = re.search(r'("' + re.escape(ECLIPSE_ID) + r'"\s*:\s*\{[^}]*?"version"\s*:\s*)"[^"]*"', text)
+    if not eclipse:
+        raise SystemExit(f'mod.json: no "{ECLIPSE_ID}" dependency with a "version"')
+    text = text[:eclipse.start()] + f'{eclipse.group(1)}"{target["eclipse"]}"' + text[eclipse.end():]
     argon_line = re.search(r'^[ \t]*"' + re.escape(ARGON_ID) + r'"\s*:\s*"[^"]*",?[ \t]*\r?\n', text, flags=re.M)
     if target["argon"] is None:
         if argon_line:
@@ -83,6 +91,7 @@ def target_mod_json(text: str, gd: str) -> str:
     meta = json.loads(text)
     assert meta["geode"] == target["geode"], meta["geode"]
     assert all(meta["gd"][name] == gd for name in GD_PLATFORMS), meta["gd"]
+    assert meta["dependencies"][ECLIPSE_ID]["version"] == target["eclipse"], meta["dependencies"]
     assert meta["dependencies"].get(ARGON_ID) == target["argon"], meta["dependencies"]
     return text
 

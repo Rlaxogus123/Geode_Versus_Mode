@@ -33,6 +33,15 @@ inline cocos2d::CCSprite* loadedFrameSprite(char const* name, char const* sheet 
     return frame ? cocos2d::CCSprite::createWithSpriteFrame(frame) : nullptr;
 }
 
+// 미니게임 버튼 그림. GD 2.2091 시트에서 Google Play 게임 버튼(GJ_gpgBtn_001.png)이 빠져서, 모양이 같은 Game Center
+// 버튼(GJ_gkBtn_001.png)을 먼저 쓰고 없으면 예전 그림을 쓴다.
+inline char const* miniGamesFrame() {
+    static constexpr char const* kNames[] = {"GJ_gkBtn_001.png", "GJ_gpgBtn_001.png"};
+    for (auto* name : kNames)
+        if (cachedFrame(name)) return name;
+    return kNames[0];
+}
+
 // 파일 스프라이트를 만든다. 파일을 못 찾아 대체 이미지가 쓰이면 nullptr.
 inline cocos2d::CCSprite* fileSprite(char const* file) {
     auto* sprite = cocos2d::CCSprite::create(file);

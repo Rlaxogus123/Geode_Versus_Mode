@@ -721,7 +721,7 @@ public:
         for (int i : sounds) {
             if (pendingAssets >= 3) break;
             if (music->isSFXDownloaded(i) || requestedSounds.contains(i) ||
-                music->isDLActive(music->getSFXDownloadKey(i)) || !wanted(i, true))
+                versus::compat::musicRequest(music, music->getSFXDownloadKey(i)) || !wanted(i, true))
                 continue;
             if (Clock::now() < soundRetryAt[i]) continue;
             requestedSounds.insert(i);
