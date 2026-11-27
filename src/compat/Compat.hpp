@@ -28,6 +28,10 @@ cocos2d::CCScene* playScene(GJGameLevel* level);
 PlayLayer* createPlayLayer(GJGameLevel* level);
 // 시작 위치를 지운다(처음부터 시작).
 void clearStartPos(PlayLayer* layer);
+// GD가 레벨을 나갈 때 하는 것처럼, 노드(PlayLayer의 UILayer 등)를 키보드 입력 대상에서 뺀다. 레벨을 GD의 나가기
+// 과정 없이 떼어 낼 때 부른다(2.2091의 UILayer는 스스로 키보드 대상으로 등록되어, 그대로 떼면 레벨이 없는 채로
+// 키 입력을 받다가 튕긴다).
+void releaseKeyboard(cocos2d::CCNode* node);
 // 레벨 문자열을 GD 레벨 형식(압축 + 키 11)으로 만든다.
 std::string compressLevelString(std::string const& data);
 // 노래 정보 / 다운로드를 위한 GD 노래 위젯. 화면에는 보이지 않게 쓴다.

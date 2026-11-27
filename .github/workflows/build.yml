@@ -20,14 +20,16 @@ concurrency:
 
 env:
   # GD 버전별 빌드 도구. GD 2.2081은 v1.0.x 릴리스와 같은 빌드 액션(main, 2026-11-03), Geode CLI, 바인딩 커밋으로,
-  # GD 2.2091은 Geode 6 SDK에 맞는 것(Geode CLI v4.0.1 이상, 빌드 액션 main 2026-11-23, 바인딩 main 2026-11-25)으로
+  # GD 2.2091은 Geode 6 SDK에 맞는 것(Geode CLI v4.0.1 이상, 빌드 액션 main 2026-11-23, 바인딩 main 2026-11-26)으로
   # 빌드한다. 액션은 아래 uses에서 커밋으로 고정한다. 하나라도 바꾸면 그 전 릴리스와 같은 파일이 다시 나온다는
   # 보장이 없어진다.
   CLI_2081: v4.0.0
   CLI_2091: v4.0.2
   BINDINGS_2081: 7f6c2a75742856de88dad354e576dcff8a28e881
   # 2.2091 바인딩은 iOS / macOS 주소가 계속 채워지는 중이라, 올릴 때는 src/compat/gd2091의 플랫폼 분기와 함께 확인한다.
-  BINDINGS_2091: 975068022f6164c483907274909ad2f700c6d646
+  # v1.1.1: 9750680은 iOS GJSearchObject::create(SearchType, std::string) 주소가 틀려 시즌 2 라운지에서 튕겼다
+  # (바인딩 8e19464 "fix gjsearchobject create on ios"). 맥 주소 수정도 같이 들어간 5e85a10으로 올림.
+  BINDINGS_2091: 5e85a108c47f46848de44390f8a70e95c86df8ff
 
 jobs:
   build:

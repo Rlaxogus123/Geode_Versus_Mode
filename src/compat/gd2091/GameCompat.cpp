@@ -4,6 +4,8 @@
 // 바인딩에 주소가 생기면 그 플랫폼 분기만 지우면 된다.
 #include "../Compat.hpp"
 
+#include <vector>
+
 #include <Geode/binding/ColorAction.hpp>
 #include <Geode/binding/CustomSongWidget.hpp>
 #include <Geode/binding/FMODAudioEngine.hpp>
@@ -143,5 +145,17 @@ void setMusicChannelVolume(FMODAudioEngine* engine, int channel, float volume) {
     engine->m_audioState.m_volumeForMusicChannels[channel] = volume;
     if (auto* active = engine->getActiveMusicChannel(channel))
         active->setVolume(volume * engine->m_audioState.m_volumeModForMusicChannels[channel]);
+}
+// 키보드 디스패처에서 node 객체에 속한 대상을 모두 뺀다(UILayer는 키보드 대상 기반 클래스를 둘 가질 수 있어
+// 등록된 대상의 실제 객체 주소로 찾는다).
+void releaseKeyboard(cocos2d::CCNode* node) {
+    auto* dispatcher = cocos2d::CCKeyboardDispatcher::get();
+    if (!node || !dispatcher || !dispatcher->m_pHandlers) return;
+    std::vector<cocos2d::CCKeyboardDelegate*> found;
+    for (auto* handler : geode::cocos::CCArrayExt<cocos2d::CCKeyboardHandler*>(dispatcher->m_pHandlers)) {
+        auto* delegate = handler ? handler->getDelegate() : nullptr;
+        if (delegate && dynamic_cast<void*>(delegate) == dynamic_cast<void*>(node)) found.push_back(delegate);
+    }
+    for (auto* delegate : found) dispatcher->removeDelegate(delegate);
 }
 }

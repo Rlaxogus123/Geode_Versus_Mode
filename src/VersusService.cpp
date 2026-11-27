@@ -31,6 +31,8 @@
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/utils/web.hpp>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -218,11 +220,19 @@ void syncServerClock(web::WebResponse const& response, int64_t sentAt = 0) {
     if (state().preciseServerClock) return;
     auto date = response.header("Date");
     if (!date) return;
+    // "Thu, 26 Nov 2026 08:40:43 GMT". 문자열 스트림을 쓰지 않는다(compat/Files.hpp의 이유와 같음).
     std::tm time{};
-    std::istringstream input{std::string(*date)};
-    input.imbue(std::locale::classic());
-    input >> std::get_time(&time, "%a, %d %b %Y %H:%M:%S GMT");
-    if (input.fail()) return;
+    char month[4] = {};
+    if (std::sscanf(std::string(*date).c_str(), "%*3s, %d %3s %d %d:%d:%d GMT", &time.tm_mday, month, &time.tm_year,
+                    &time.tm_hour, &time.tm_min, &time.tm_sec) != 6)
+        return;
+    static constexpr char const* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    auto const found = std::find_if(std::begin(months), std::end(months),
+                                    [&](char const* name) { return std::strcmp(name, month) == 0; });
+    if (found == std::end(months)) return;
+    time.tm_mon = static_cast<int>(found - std::begin(months));
+    time.tm_year -= 1900;
 #ifdef GEODE_IS_WINDOWS
     auto seconds = _mkgmtime(&time);
 #else

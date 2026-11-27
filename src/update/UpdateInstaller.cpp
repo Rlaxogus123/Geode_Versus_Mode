@@ -1,6 +1,7 @@
 // 플랫폼 설치기 구현. 받아 둔 .geode 패키지를 mods 폴더에 교체 설치하고 게임을 재시작한다.
 // 설치 트랜잭션은 AndroidPackageTransaction.hpp(PackageTransaction)가, Windows 부팅 확인은
 // WindowsUpdateReceipt.hpp가 맡는다.
+#include "../compat/Files.hpp"
 #include "UpdateInstaller.hpp"
 #include "AndroidPackageTransaction.hpp"
 #include "WindowsUpdateReceipt.hpp"
@@ -26,8 +27,7 @@ void invalidateExtraction() {
     std::error_code error;
     auto path = versus::compat::stdPath(dirs::getModRuntimeDir() / Mod::get()->getID() / "modified-at");
     if (!fs::exists(path, error)) return;
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out << "versus-update";
+    versus::files::write(path, "versus-update");
 }
 // Patchless 로더에서 모드 바이너리를 따로 교체하기 위한 도우미.
 // stage는 패키지에서 바이너리를 임시 이름으로 꺼내고, commit은 이름을 바꿔 교체하고,

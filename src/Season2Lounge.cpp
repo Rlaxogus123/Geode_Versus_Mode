@@ -2,6 +2,7 @@
 // 배경 장면으로 띄우고, 그 위에 다른 플레이어 군중 / 배지 / 안내판을 올리며 카메라와 입력을 제어한다.
 // LoungeMap은 lounge 맵 레벨을 GD 서버에서 받아 캐시하고, LoungeAudio는 맵에 쓰이는 노래 / 효과음을 내려받는다.
 // 파일 끝의 $modify 훅들은 lounge PlayLayer가 일반 플레이처럼 끝나거나 음악을 바꾸지 않게 막는다.
+#include "compat/Files.hpp"
 #include "Season2Lounge.hpp"
 #include "Season2LoungeLevel.hpp"
 #include "BattleLevelData.hpp"
@@ -48,13 +49,11 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
 #include <string_view>
 #include <vector>
-#include <sstream>
 #include <string>
 
 using namespace geode::prelude;
@@ -94,11 +93,7 @@ std::string trimmed(std::string text) {
 std::string readFile(std::filesystem::path const& path) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error)) return {};
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return {};
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
+    return versus::files::read(path).value_or(std::string());
 }
 // 레벨 문자열(압축 또는 원문)을 풀어 플랫포머 레벨이면 원문을, 아니면 빈 문자열을 반환한다.
 std::string platformerData(std::string text) {
@@ -317,10 +312,8 @@ public:
         if (!platformerData(text).empty()) {
             std::string sfx(level->m_sfxIDs);
             std::erase_if(sfx, [](char c) { return !(c == ',' || (c >= '0' && c <= '9')); });
-            {
-                std::ofstream file(cachePath(), std::ios::binary | std::ios::trunc);
-                if (file) file << m_levelID << ' ' << level->m_levelVersion << " sfx:" << sfx << '\n' << text;
-            }
+            versus::files::write(cachePath(), std::to_string(m_levelID) + ' ' + std::to_string(level->m_levelVersion) +
+                                                  " sfx:" + sfx + '\n' + text);
             m_keptInfo.reset();
             log::info("Versus: Season 2 lounge map {} v{} downloaded (sfx {})", m_levelID, level->m_levelVersion,
                       sfx.empty() ? std::string("none") : sfx);
@@ -950,6 +943,8 @@ public:
             if (auto* scheduler = CCDirector::sharedDirector()->getScheduler();
                 scheduler->getTimeScale() != m_timeScale)
                 scheduler->setTimeScale(m_timeScale);
+            if (auto* ui = play->m_uiLayer) versus::compat::releaseKeyboard(ui);
+            versus::compat::releaseKeyboard(play);
             play->removeFromParentAndCleanup(true);
             audio::endLevelSong();
             log::info("Versus: Season 2 lounge closed");
@@ -1324,6 +1319,8 @@ void yieldTo(bool giveUp) {
             host->detach();
             if (giveUp) host->giveUp();
         } else {
+            if (auto* ui = play->m_uiLayer) versus::compat::releaseKeyboard(ui);
+            versus::compat::releaseKeyboard(play);
             play->removeFromParentAndCleanup(true);
         }
     }

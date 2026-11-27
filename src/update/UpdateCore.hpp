@@ -217,17 +217,12 @@ public:
         require(!fs::is_symlink(directory), "Unsafe update directory");
         auto marker = directory / "download.identity";
         regularOrAbsent(marker);
-        std::ifstream in(marker);
-        std::string identity;
-        std::getline(in, identity);
-        in.close();
+        auto const rows = versus::files::lines(versus::files::read(marker).value_or(std::string()));
+        std::string const identity = rows.empty() ? std::string() : rows[0];
         if (identity != m.identity()) {
             clear(part());
             clear(ready());
-            std::ofstream out(marker, std::ios::trunc);
-            out << m.identity();
-            out.flush();
-            require(bool(out), "Cannot save download identity");
+            require(versus::files::write(marker, m.identity()), "Cannot save download identity");
         }
         regularOrAbsent(ready());
         regularOrAbsent(part());
@@ -271,13 +266,13 @@ public:
                 plan = nullptr;
             }
         }
-        std::ifstream base;
+        versus::files::File base;
         if (plan) {
             std::error_code error;
             if (fs::file_size(plan->base, error) != plan->baseSize || error)
                 plan = nullptr;
             else {
-                base.open(plan->base, std::ios::binary);
+                base = versus::files::open(plan->base, "rb");
                 if (!base) plan = nullptr;
             }
         }
@@ -305,20 +300,15 @@ public:
                         auto const count = std::min<uint64_t>(segment->length - into, CHUNK_SIZE);
                         std::vector<uint8_t> bytes(count);
                         if (segment->kind == 'c') {
-                            base.clear();
-                            base.seekg(static_cast<std::streamoff>(segment->baseOffset + into));
-                            base.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(count));
-                            if (!base || static_cast<uint64_t>(base.gcount()) != count)
+                            if (!versus::files::readAt(base.get(), segment->baseOffset + into, bytes.data(), count))
                                 throw PatchError("Cannot read the installed package");
                         } else
                             std::copy_n(segment->bytes.begin() + static_cast<std::ptrdiff_t>(into), count,
                                         bytes.begin());
                         regularOrAbsent(part());
-                        std::ofstream out(part(), std::ios::binary | std::ios::app);
-                        out.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
-                        out.flush();
-                        require(bool(out), "Cannot write download; check disk space");
-                        out.close();
+                        require(versus::files::write(part(),
+                                                     {reinterpret_cast<char const*>(bytes.data()), bytes.size()}, true),
+                                "Cannot write download; check disk space");
                         offset = fs::file_size(part());
                         progress(offset);
                         continue;
@@ -345,11 +335,10 @@ public:
                         require(response.data.size() == end - offset + 1, "Incomplete download chunk; retry to resume");
                     }
                     regularOrAbsent(part());
-                    std::ofstream out(part(), std::ios::binary | (full ? std::ios::trunc : std::ios::app));
-                    out.write(reinterpret_cast<char const*>(response.data.data()), response.data.size());
-                    out.flush();
-                    require(bool(out), "Cannot write download; check disk space");
-                    out.close();
+                    require(versus::files::write(
+                                part(),
+                                {reinterpret_cast<char const*>(response.data.data()), response.data.size()}, !full),
+                            "Cannot write download; check disk space");
                     offset = fs::file_size(part());
                     progress(offset);
                 }

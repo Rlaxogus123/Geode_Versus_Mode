@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.1 (2026-11-26)
+
+### Fixes
+- 2.2081: the 1.1.0 package for 2.2081 couldn't be installed (the update stopped with "Downloaded file is not a valid Geode package", and Geode refused the file too), so Versus couldn't be entered on 2.2081. Its Eclipse dependency had a version range Geode 5 doesn't accept; it is back to the range of 1.0.8.
+- 2.2091 (iOS): the game crashed when the Season 2 cup screen opened its lounge (Versus was built with a wrong iOS address for a GD level search function; the 2.2091 build now uses newer bindings with the fixed addresses for iOS and macOS).
+- 2.2091 (Android 32-bit): the game crashed on the Season 2 cup screen. Versus now reads and writes its files without C++ file streams, which crashed there.
+- 2.2091 (Windows): the game could crash on a key press after leaving the Season 2 cup screen (the lounge's level kept receiving keys after it was gone).
+
 ## v1.1.0 (2026-11-26)
 
 ### Geometry Dash 2.2091

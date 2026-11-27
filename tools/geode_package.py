@@ -3,8 +3,10 @@
     python3 tools/geode_package.py modjson <GD 버전> [--repo 저장소 폴더]
         mod.json을 GD 2.2081(Geode 5) 또는 GD 2.2091(Geode 6) 빌드용으로 바꾼다. 바뀌는 것은 Geode 버전,
         플랫폼별 GD 버전, Eclipse 의존성의 버전 범위, Argon 의존성(GD 2.2091만)뿐이고 나머지 줄은 그대로 둔다.
+        GitHub Actions에서(또는 --fetch) Eclipse 범위는 빌드 때 받을 판의 범위다(GD_TARGETS 참고).
     python3 tools/geode_package.py normalize <입력.geode> <출력.geode> [--epoch 초]
-        같은 내용이면 언제 만들어도 바이트까지 같은 파일이 되도록 다시 묶는다
+        mod.json의 Eclipse 범위를 Geode 로더가 받는 범위로 되돌리고, 같은 내용이면 언제 만들어도 바이트까지
+        같은 파일이 되도록 다시 묶는다
         (항목 이름순, 시각은 --epoch 또는 SOURCE_DATE_EPOCH, deflate 9, 권한 고정).
     python3 tools/geode_package.py check <패키지.geode> [--repo 저장소 폴더]
         바이너리 5개를 뺀 모든 항목이 저장소의 파일에서 왔는지 확인한다. mod.json은 패키지가 가리키는 GD 버전용으로
@@ -41,10 +43,13 @@ ZIP_EPOCH_MIN = 315532800  # 1980-01-01, zip이 담을 수 있는 가장 이른 
 # 빌드할 수 있는 GD 버전: 그 버전의 Geode SDK 버전, Eclipse(선택 의존성)의 버전 범위, Argon 모드 의존성
 # (없으면 None, GD 2.2081은 Argon을 CPM으로 넣는다).
 # Eclipse는 v1.10.0부터 Geode 6용이다. Geode CLI는 Geode 버전을 보지 않고 범위에 맞는 가장 최근 버전을 받으므로,
-# GD 2.2081 빌드가 Geode 5용 Eclipse(설정 API 헤더)를 받도록 범위를 나눈다.
+# GitHub Actions의 GD 2.2081 빌드는 Geode 5용 Eclipse(설정 API 헤더)를 받도록 "eclipse_fetch" 범위로 빌드한다.
+# 그런데 Geode 로더(5와 6 모두)는 의존성 버전에 ">="와 "*"만 받고, 다른 범위가 있는 패키지는 통째로 잘못된
+# 패키지로 본다(v1.1.0의 GD 2.2081 패키지가 이래서 게임 업데이터·Geode 어디서도 설치되지 않았다). 그래서 저장소와
+# 패키지의 mod.json은 늘 "eclipse" 범위이고, normalize가 패키지의 mod.json을 그 범위로 되돌린다.
 GD_TARGETS = {
-    "2.2081": {"geode": "5.7.1", "eclipse": "<v1.10.0", "argon": None},
-    "2.2091": {"geode": "6.0.0", "eclipse": ">=v1.10.0", "argon": ">=v2.0.0-beta.1"},
+    "2.2081": {"geode": "5.7.1", "eclipse": ">=v1.9.4", "eclipse_fetch": "<v1.10.0", "argon": None},
+    "2.2091": {"geode": "6.0.0", "eclipse": ">=v1.10.0", "eclipse_fetch": ">=v1.10.0", "argon": ">=v2.0.0-beta.1"},
 }
 GD_PLATFORMS = ("win", "android", "mac", "ios")
 ARGON_ID = "dankmeme.argon"
@@ -55,8 +60,22 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def target_mod_json(text: str, gd: str) -> str:
-    """mod.json 내용(text)을 GD 버전 gd 빌드용으로 바꾼 내용. 줄바꿈과 다른 줄은 그대로 둔다."""
+def loader_problems(meta: dict) -> list[str]:
+    """Geode 로더가 이 mod.json을 잘못된 패키지로 볼 이유(ModMetadataImpl의 의존성 검사와 같은 규칙):
+    의존성 버전은 ">=..." 또는 "*"이거나 연산자가 없어야 한다(연산자가 없으면 ">="로 읽는다)."""
+    problems = []
+    for mod, dep in meta.get("dependencies", {}).items():
+        version = dep if isinstance(dep, str) else dep.get("version", "*") if isinstance(dep, dict) else None
+        if not isinstance(version, str):
+            problems.append(f"dependency {mod}: no version string")
+        elif version != "*" and not version.startswith(">=") and version[:1] in "<>=":
+            problems.append(f'dependency {mod}: version "{version}" (Geode loaders only accept ">=..." or "*")')
+    return problems
+
+
+def target_mod_json(text: str, gd: str, fetch: bool = False) -> str:
+    """mod.json 내용(text)을 GD 버전 gd용으로 바꾼 내용. 줄바꿈과 다른 줄은 그대로 둔다.
+    fetch면 Eclipse 범위가 빌드 때 받을 판의 범위(eclipse_fetch)다: 그 mod.json은 패키지에 그대로 넣으면 안 된다."""
     if gd not in GD_TARGETS:
         raise SystemExit(f"unknown GD version {gd} (known: {', '.join(GD_TARGETS)})")
     target = GD_TARGETS[gd]
@@ -73,7 +92,8 @@ def target_mod_json(text: str, gd: str) -> str:
     eclipse = re.search(r'("' + re.escape(ECLIPSE_ID) + r'"\s*:\s*\{[^}]*?"version"\s*:\s*)"[^"]*"', text)
     if not eclipse:
         raise SystemExit(f'mod.json: no "{ECLIPSE_ID}" dependency with a "version"')
-    text = text[:eclipse.start()] + f'{eclipse.group(1)}"{target["eclipse"]}"' + text[eclipse.end():]
+    eclipse_range = target["eclipse_fetch" if fetch else "eclipse"]
+    text = text[:eclipse.start()] + f'{eclipse.group(1)}"{eclipse_range}"' + text[eclipse.end():]
     argon_line = re.search(r'^[ \t]*"' + re.escape(ARGON_ID) + r'"\s*:\s*"[^"]*",?[ \t]*\r?\n', text, flags=re.M)
     if target["argon"] is None:
         if argon_line:
@@ -91,17 +111,21 @@ def target_mod_json(text: str, gd: str) -> str:
     meta = json.loads(text)
     assert meta["geode"] == target["geode"], meta["geode"]
     assert all(meta["gd"][name] == gd for name in GD_PLATFORMS), meta["gd"]
-    assert meta["dependencies"][ECLIPSE_ID]["version"] == target["eclipse"], meta["dependencies"]
+    assert meta["dependencies"][ECLIPSE_ID]["version"] == eclipse_range, meta["dependencies"]
     assert meta["dependencies"].get(ARGON_ID) == target["argon"], meta["dependencies"]
+    if not fetch:
+        problems = loader_problems(meta)
+        if problems:
+            raise SystemExit("mod.json: " + "; ".join(problems))
     return text
 
 
-def write_mod_json(repo: str, gd: str) -> bool:
-    """저장소의 mod.json을 gd 빌드용으로 바꿔 쓴다. 바뀌었으면 True."""
+def write_mod_json(repo: str, gd: str, fetch: bool = False) -> bool:
+    """저장소의 mod.json을 gd용으로 바꿔 쓴다. 바뀌었으면 True."""
     path = os.path.join(repo, "mod.json")
     with open(path, encoding="utf-8", newline="") as handle:
         text = handle.read()
-    result = target_mod_json(text, gd)
+    result = target_mod_json(text, gd, fetch)
     if result != text:
         with open(path, "w", encoding="utf-8", newline="") as handle:
             handle.write(result)
@@ -136,6 +160,10 @@ def read_entries(path: str) -> dict[str, bytes]:
 def normalize(source: str, target: str, epoch: int) -> str:
     stamp = time.gmtime(max(epoch, ZIP_EPOCH_MIN))[:6]
     entries = read_entries(source)
+    if "mod.json" in entries:
+        # 빌드용(eclipse_fetch) 범위를 Geode 로더가 받는 범위로 되돌린다.
+        text = entries["mod.json"].decode("utf-8")
+        entries["mod.json"] = target_mod_json(text, package_gd(entries)).encode("utf-8")
     with zipfile.ZipFile(target, "w") as package:
         for name in sorted(entries):
             info = zipfile.ZipInfo(name, date_time=stamp)
@@ -215,6 +243,8 @@ def check(package_path: str, repo: str) -> bool:
             path = os.path.join(repo, name)
             with open(path, encoding="utf-8", newline="") as handle:
                 original = target_mod_json(handle.read(), gd).encode("utf-8")
+            for problem in loader_problems(json.loads(data)):
+                problems.append(f"mod.json: {problem}")
             ok, how = same_file(name, data, original)
             if not ok:
                 problems.append(f"mod.json: differs from the repository's mod.json for GD {gd} ({how})")
@@ -276,6 +306,8 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     zero = sub.add_parser("modjson")
     zero.add_argument("gd", choices=sorted(GD_TARGETS))
+    zero.add_argument("--fetch", action="store_true",
+                      help="Eclipse range for fetching the build's headers (GitHub Actions does this by default)")
     zero.add_argument("--repo", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     one = sub.add_parser("normalize")
     one.add_argument("source")
@@ -291,9 +323,11 @@ def main() -> int:
     four.add_argument("package")
     args = parser.parse_args()
     if args.command == "modjson":
-        changed = write_mod_json(args.repo, args.gd)
+        fetch = args.fetch or bool(os.environ.get("GITHUB_ACTIONS"))
+        changed = write_mod_json(args.repo, args.gd, fetch)
         target = GD_TARGETS[args.gd]
-        print(f"mod.json: GD {args.gd}, Geode {target['geode']}" + ("" if changed else " (already)"))
+        print(f"mod.json: GD {args.gd}, Geode {target['geode']}" + (" (build range for Eclipse)" if fetch else "")
+              + ("" if changed else " (already)"))
         return 0
     if args.command == "normalize":
         print(normalize(args.source, args.target, args.epoch))

@@ -2,6 +2,8 @@
 // 업데이터가 이 영수증이 있으면 새 버전이 정상 시작된 것으로 보고 롤백하지 않는다.
 #pragma once
 #include "UpdateCore.hpp"
+
+#include <fstream>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX

@@ -3,6 +3,7 @@
 // 새 버전이 정상 부팅되면 확인 영수증을 남기고 문제가 있으면 백업으로 복구한다.
 // 이름과 달리 Android 외 플랫폼에서도 쓰인다(Windows는 파일 교체 재시도 포함).
 #pragma once
+#include "../compat/Files.hpp"
 #include "UpdateCore.hpp"
 #include <chrono>
 #include <optional>
@@ -85,12 +86,7 @@ class PackageTransaction {
         temporary += ".tmp";
         regularOrAbsent(temporary);
         regularOrAbsent(path);
-        {
-            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-            out << value;
-            out.flush();
-            require(bool(out), "Cannot save update journal");
-        }
+        require(versus::files::write(temporary, value), "Cannot save update journal");
         sync(temporary);
         replace(temporary, path);
         sync(path.parent_path(), true);
@@ -100,14 +96,14 @@ class PackageTransaction {
         auto path = m_root / "android-install.job";
         regularOrAbsent(path);
         require(fs::is_regular_file(path) && fs::file_size(path) < 1024, "Missing update journal");
-        std::ifstream in(path);
-        std::string magic;
+        auto rows = versus::files::lines(versus::files::read(path).value_or(std::string()));
+        rows.resize(5);
+        std::string const magic = rows[0];
         Journal j;
-        std::getline(in, magic);
-        std::getline(in, j.oldHash);
-        std::getline(in, j.newHash);
-        std::getline(in, j.version);
-        std::getline(in, j.channel);
+        j.oldHash = rows[1];
+        j.newHash = rows[2];
+        j.version = rows[3];
+        j.channel = rows[4];
         require(magic == "VERSUS-ANDROID-1" && digestValid(j.oldHash) && digestValid(j.newHash) &&
                     versionValid(j.version) && (channelValid(j.channel) || j.channel == "any"),
                 "Invalid update journal");
@@ -175,10 +171,8 @@ public:
     std::string receipt() const {
         auto path = m_root / "android-boot-confirmed.txt";
         regularOrAbsent(path);
-        std::ifstream in(path);
-        std::string value;
-        std::getline(in, value);
-        return value;
+        auto rows = versus::files::lines(versus::files::read(path).value_or(std::string()));
+        return rows.empty() ? std::string() : rows[0];
     }
     // 저널을 읽는다. 없으면 nullopt, 손상되었으면 지우고 nullopt.
     std::optional<Journal> readJournal() {

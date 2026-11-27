@@ -1,10 +1,11 @@
 // 외부 라이브러리 없이 구현한 SHA-256과 파일 해시 함수.
 #pragma once
+#include "../compat/Files.hpp"
 #include <array>
 #include <bit>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
+#include <cstdio>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -95,15 +96,16 @@ public:
 };
 // 파일을 64KB씩 읽어 SHA-256을 계산한다. 읽기 실패 시 예외.
 inline std::string hashFile(std::filesystem::path const& path) {
-    std::ifstream in(path, std::ios::binary);
+    auto in = versus::files::open(path, "rb");
     if (!in) throw std::runtime_error("Cannot read update file");
     Sha256 hash;
     std::array<uint8_t, 65536> bytes;
-    while (in) {
-        in.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
-        hash.add({bytes.data(), static_cast<size_t>(in.gcount())});
+    while (true) {
+        auto const count = std::fread(bytes.data(), 1, bytes.size(), in.get());
+        hash.add({bytes.data(), count});
+        if (count < bytes.size()) break;
     }
-    if (!in.eof()) throw std::runtime_error("Update file read failed");
+    if (std::ferror(in.get())) throw std::runtime_error("Update file read failed");
     return hash.finish();
 }
 }

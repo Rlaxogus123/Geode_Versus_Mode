@@ -70,4 +70,7 @@ bool targetPaused(cocos2d::CCScheduler* scheduler, cocos2d::CCObject* target) {
 void setMusicChannelVolume(FMODAudioEngine* engine, int channel, float volume) {
     if (engine) engine->setChannelVolume(channel, AudioTargetType::MusicChannel, volume);
 }
+// 2.2081의 UILayer는 CCLayer의 키보드 설정(setKeyboardEnabled)으로만 등록되어 레이어가 빠질 때(onExit) 같이 빠진다.
+// 할 일이 없다(2.2081 iOS 바인딩에는 키보드 디스패처 함수 주소도 없다).
+void releaseKeyboard(cocos2d::CCNode*) {}
 }

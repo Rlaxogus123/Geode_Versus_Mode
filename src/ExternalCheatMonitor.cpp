@@ -2,6 +2,7 @@
 // 치트가 켜져 있는지 판정하는 모듈. 각 모드의 저장 설정, 런타임 API, 훅에서 관측한
 // 흔적을 합쳐 ExternalCheatStatus로 돌려준다. 플랫폼별(Windows/Android/macOS/iOS) 처리가
 // 섞여 있다.
+#include "compat/Files.hpp"
 #include "ExternalCheatMonitor.hpp"
 #include "IntegrityCodes.hpp"
 #include "IntegrityFeatures.hpp"
@@ -32,7 +33,6 @@
 #endif
 #ifdef GEODE_IS_ANDROID
 #include <link.h>
-#include <fstream>
 #elif defined(GEODE_IS_MACOS) || defined(GEODE_IS_IOS)
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -276,12 +276,10 @@ MegaHackRuntimeApi scanMegaHackApi() {
     LoadedObject object;
     dl_iterate_phdr(findMegaHackObject, &object);
     if (object.path.empty()) return {};
-    std::ifstream file(object.path, std::ios::binary);
+    auto file = versus::files::open(object.path, "rb");
     if (!file) return {};
     auto read = [&file](uint64_t offset, void* into, size_t size) {
-        file.seekg(static_cast<std::streamoff>(offset));
-        file.read(static_cast<char*>(into), static_cast<std::streamsize>(size));
-        return static_cast<size_t>(file.gcount()) == size;
+        return versus::files::readAt(file.get(), offset, into, size);
     };
     using Ehdr = ElfW(Ehdr);
     using Shdr = ElfW(Shdr);
